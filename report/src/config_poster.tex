@@ -1,0 +1,72 @@
+% CONFIGURA BEAMER
+% https://latex.ppizarror.com/doc/beameruserguide.pdf
+\mode<presentation> {
+	
+	% CONFIGURACIONES GENERALES
+	\def\colnumbers {2}
+	\def\colseparation {0.03\paperwidth}
+	\def\posterheight {82}
+	\def\posterwidth {65}
+	
+	% CONFIGURA LOS BLOQUES, VALORES EN [EM]
+	\def\blockmarginbottom {1}
+	\def\blockpaddingbottom {0.6}
+	\def\blockpaddingleft {0.6}
+	\def\blockpaddingright {0.6}
+	\def\blockpaddingtop {0.75}
+	
+	% ESTILO BLOQUES ALERT/EXAMPLE
+	\def\blockaemarginbottom {1}
+	\def\blockaepaddingbottom {0.6}
+	\def\blockaepaddingleft {0.6}
+	\def\blockaepaddingright {0.6}
+	\def\blockaepaddingtop {0.75}
+	
+	% CONFIGURACIÓN DE COLORES Y FUENTES
+	% Básicos
+	\setbeamercolor{palette primary}{fg=black,bg=white}
+	\setbeamercolor{palette secondary}{fg=black,bg=white}
+	\setbeamercolor{palette tertiary}{bg=black,fg=white}
+	\setbeamercolor{palette quaternary}{fg=black,bg=white}
+	\setbeamercolor{structure}{fg=mitred}
+	
+	% Bibliografía
+	\setbeamercolor{bibliography item}{fg=black}
+	\setbeamercolor{bibliography entry author}{fg=black}
+	\setbeamercolor{bibliography entry title}{fg=black}
+	\setbeamercolor{bibliography entry location}{fg=black}
+	\setbeamercolor{bibliography entry note}{fg=black}
+	\setbeamertemplate{bibliography item}[text]
+	
+	% Bloque
+	\setbeamercolor{block title}{fg=mitred,bg=white}
+	\setbeamercolor{block separator}{bg=black}
+	\setbeamercolor{block body}{fg=black,bg=white}
+	\setbeamerfont{block title}{size=\Large,series=\bfseries}
+	
+	% Bloque de alerta
+	\setbeamercolor{block alerted title}{fg=white,bg=gray}
+	\setbeamercolor{block alerted separator}{bg=lgray}
+	\setbeamercolor{block alerted body}{fg=white,bg=gray}
+	
+	% Bloque de ejemplo
+	\setbeamercolor{block example title}{fg=mitred,bg=lgray}
+	\setbeamercolor{block example separator}{bg=black}
+	\setbeamercolor{block example body}{fg=black,bg=lgray}
+	
+	% Cabecera y Títulos
+	\setbeamercolor{headline}{fg=black,bg=lgray}
+	\setbeamercolor{heading}{fg=black}
+	\setbeamerfont{headline}{}
+	\setbeamerfont{headline title}{size=\huge,series=\bfseries}
+	\setbeamerfont{headline author}{size=\Large}
+	\setbeamerfont{headline institute}{size=\small}
+	\setbeamerfont{heading}{series=\bfseries}
+	
+	% Navegación
+	\beamertemplatenavigationsymbolsempty
+	
+	% Pie de página
+	\setbeamerfont{footline}{size=\normalsize}
+	
+}

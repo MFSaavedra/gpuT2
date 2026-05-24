@@ -1,0 +1,253 @@
+% Template:     Presentación LaTeX
+% Documento:    Funciones del template
+% Versión:      DEV
+% Codificación: UTF-8
+%
+% Autor: Pablo Pizarro R.
+%        pablo@ppizarror.com
+%
+% Manual template: [https://latex.ppizarror.com/presentacion]
+% Licencia MIT:    [https://opensource.org/licenses/MIT]
+
+% Importación de librerías
+\usepackage{changepage}
+
+% Crea variables para guardar configuraciones del tabularframe
+\global\def\GLOBALtabularframebarcreated {false}
+\global\def\GLOBALtabularframebarfontsize {\normalsize}
+\global\def\GLOBALtabularframebarheight {0.05}
+\global\def\GLOBALtabularframebarheightmargin {0}
+\global\def\GLOBALtabularframebartextcentered {true}
+\global\def\GLOBALtabularframecontentheight {0.65}
+\global\def\GLOBALtabularframecontentleftcentered {false}
+\global\def\GLOBALtabularframecontentleftfontsize {\normalsize}
+\global\def\GLOBALtabularframecontentrightcentered {false}
+\global\def\GLOBALtabularframecontentrightfontsize {\normalsize}
+\global\def\GLOBALtabularframecontentwidthleft {0.4}
+\global\def\GLOBALtabularframecontentwidthright {0.6}
+\global\def\GLOBALtabularframeupdateleftcontent {true}
+
+\def\LOCALtabularframecolumnselected {1}
+\def\LOCALtabularframeinit {false}
+\def\LOCALtabularframestorevar {true}
+
+% Archivo que guarda códigos generados
+\newwrite\filetabularframehead
+\newwrite\filetabularframeleftcontent
+
+% Define contadores
+\newcounter{tabularcolnumber}
+\setcounter{tabularcolnumber}{0}
+
+% Define tamaños
+\newlength{\coretabularheightsize}
+
+% Función que configura el texto de la barra superior del tabular frame
+% 	#1 Tamaño de letra
+%	#2 Texto centrado
+\newcommand{\tabularframebartextcfg}[2]{%
+	\emptyvarerr{\tabularframebartextcfg}{#1}{Tamano fuente no definida}%
+	\emptyvarerr{\tabularframebartextcfg}{#2}{Texto centrado no definido}%
+	\corecheckbooleanvar{#2}%
+	\global\def\GLOBALtabularframebarfontsize {#1}%
+	\global\def\GLOBALtabularframebartextcentered {#2}%
+}
+
+% Función que configura el entorno tabular frames
+%	#1	Margen superior del head en porcentaje del alto de la página
+%	#2	Altura de head en porcentaje (0-1)
+%	#3	Altura de content en porcentaje (0-1)
+%	#4	Ancho de la barra izquierda de contenidos (coloreada)
+%	#5	Ancho de la barra derecha de contenidos
+\newcommand{\tabularframecfg}[5][]{%
+	\emptyvarerr{\tabularframecfg}{#2}{Altura de head no definido}%
+	\emptyvarerr{\tabularframecfg}{#3}{Altura de content no definido}%
+	\emptyvarerr{\tabularframecfg}{#4}{Ancho de la barra izquierda de contenidos}%
+	\emptyvarerr{\tabularframecfg}{#5}{Ancho de la barra derecha de contenidos}%
+	\ifthenelse{\equal{#1}{}}{}{%
+		\global\def\GLOBALtabularframebarheightmargin {#1}%
+	}%
+	\global\def\GLOBALtabularframebarheight {#2}%
+	\global\def\GLOBALtabularframecontentheight {#3}%
+	\global\def\GLOBALtabularframecontentwidthleft {#4}%
+	\global\def\GLOBALtabularframecontentwidthright {#5}%
+	\setlength{\coretabularheightsize}{\GLOBALtabularframebarheight\textheight}%
+}
+
+% Función que configura la alineación del entorno tabular frames
+%	#1	Columna izquierda contenidos centrada (true/false)
+%	#2	Columna derecha contenidos centrada (true/false)
+\newcommand{\tabularframecfgalign}[2]{%
+	\emptyvarerr{\tabularframecfgalign}{#1}{Centrado columna izquierda no definido}%
+	\emptyvarerr{\tabularframecfgalign}{#2}{Centrado columna derecha no definido}%
+	\corecheckbooleanvar{#1}%
+	\corecheckbooleanvar{#2}%
+	\global\def\GLOBALtabularframecontentleftcentered {#1}%
+	\global\def\GLOBALtabularframecontentrightcentered {#2}%
+}
+
+% Función que configura el tamaño de fuente de los tabular frames
+%	#1	Tamaño fuente columna izquierda
+%	#2	Tamaño fuente columna derecha
+\newcommand{\tabularframecfgfontsize}[2]{%
+	\emptyvarerr{\tabularframecfgfontsize}{#1}{Tamano fuente columna izquierda no definido}%
+	\emptyvarerr{\tabularframecfgfontsize}{#2}{Tamano fuente columna derecha no definido}%
+	\global\def\GLOBALtabularframecontentleftfontsize {#1}%
+	\global\def\GLOBALtabularframecontentrightfontsize {#2}%
+}
+
+% Crea el header del tabular frame, acepta columnas creadas con \addtfheadcolumn
+%	#1	Número de la columna destacada (desde 1)
+\newenvironment{tabularframehead}[1]{%
+	\emptyvarerr{\tabularframehead}{#1}{Numero de columna destacada no definido}%
+	\def\LOCALtabularframecolumnselected {#1}%
+	\def\LOCALtabularframeinit {true}%
+	\setcounter{tabularcolnumber}{0}%
+	\ifthenelse{\equal{\LOCALtabularframestorevar}{true}}{%
+		\immediate\openout\filetabularframehead=\jobname.tframeh%
+	}{}%
+	\vspace{\dimexpr-0.5\coretabularheightsize + \GLOBALtabularframebarheightmargin\textheight}%
+	\begin{columns}[t,onlytextwidth]%
+	}{%
+	\end{columns}
+	\setcounter{tabularcolnumber}{-1}%
+	\ifthenelse{\equal{\LOCALtabularframestorevar}{true}}{%
+		\immediate\closeout\filetabularframehead%
+		\global\def\GLOBALtabularframebarcreated {true}%
+	}{}%
+}
+
+% Función que repite el último entorno tabular frames
+%	#1	Número de la columna destacada (desde 1)
+\newcommand{\tabularframeheadrepeat}[1]{%
+	\ifthenelse{\equal{\GLOBALtabularframebarcreated}{true}}{}{%
+		\throwwarning{Funcion \noexpand\tabularframeheadrepeat no puede usarse si no existe un \noexpand\tabularframehead previo}\stop}%
+	\emptyvarerr{\tabularframeheadrepeat}{#1}{Numero de columna destacada no definido}%
+	\def\LOCALtabularframestorevar {false}%
+	\begin{tabularframehead}{#1}%
+		\input{\jobname.tframeh}%
+	\end{tabularframehead}
+	\def\LOCALtabularframestorevar {true}%
+}
+
+% Agrega una columna al tabular head
+%	#1	Tamaño de la columna
+%	#2	Texto
+\newcommand{\addtfheadcolumn}[2]{%
+	\ifthenelse{\equal{\LOCALtabularframeinit}{true}}{}{%
+		\throwwarning{Funcion \noexpand\addtfheadcolumn no puede usarse fuera del entorno \noexpand\tabularframehead}\stop}%
+	\emptyvarerr{\addtfheadcolumn}{#1}{Tamano de la columna no definido}%
+	\emptyvarerr{\addtfheadcolumn}{#2}{Texto de la columna no definido}%
+	\ifthenelse{\equal{\LOCALtabularframestorevar}{true}}{%
+		\immediate\write\filetabularframehead{\unexpanded{\addtfheadcolumn{#1}{#2}}\LOCALpercentchar}%
+	}{}%
+	\stepcounter{tabularcolnumber}%
+	\column{#1\linewidth}%
+	\ifthenelse{\equal{\thetabularcolnumber}{\LOCALtabularframecolumnselected}}{%
+		\transparent{1.0}%
+	}{%
+		\transparent{\tabularframeopacity}%
+	}%
+	\usebeamercolor[fg]{frametitle}\colorbox{bg}{\begin{minipage}[t][\GLOBALtabularframebarheight\textheight][t]{\dimexpr\linewidth - 15\fboxrule}%
+		\usebeamercolor[fg]{frametitle}{%
+			\ifthenelse{\equal{\GLOBALtabularframebartextcentered}{false}}{%
+				\verticallycentertext{\GLOBALtabularframebarfontsize{#2}}%
+			}{%
+				\begin{center}%
+					\verticallycentertext{\GLOBALtabularframebarfontsize{#2}}%
+				\end{center}
+			}%
+		}%
+	\end{minipage}}%
+}
+
+% Inicia el contenido de un tabular frame
+%	#1	Panel izquierdo
+%	#2	Panel derecho
+\newcommand{\tabularframecontent}[2]{%
+	\ifthenelse{\equal{\thetabularcolnumber}{-1}}{}{%
+		\throwwarning{Funcion \noexpand\tabularframecontent no puede usarse sin haber inicializado \noexpand\tabularframehead}\stop}%
+	\emptyvarerr{\tabularframecontent}{#1}{Columna izquierda no definida}%
+	\emptyvarerr{\tabularframecontent}{#2}{Columna derecha no definida}%
+	\vspace{-2.5\fboxrule}%
+	\begin{columns}[t,onlytextwidth]%
+		\column{\GLOBALtabularframecontentwidthleft\linewidth}%
+		\usebeamercolor[fg]{block body}\colorbox{bg}%
+		{\begin{minipage}[t][\GLOBALtabularframecontentheight \textheight][t]{\dimexpr\textwidth - 15\fboxrule}%
+			\vspace{\tabularframepaddingtop em}%
+			\hspace{\tabularframepaddingleft em}%
+			\begin{minipage}[t][\dimexpr\GLOBALtabularframecontentheight \textheight-\tabularframepaddingtop em][t]{\dimexpr\linewidth - \tabularframepaddingleft em - \tabularframepaddingright em}%
+				\GLOBALtabularframecontentleftfontsize%
+				\ifthenelse{\equal{\GLOBALtabularframecontentleftcentered}{false}}{%
+					#1%
+				}{%
+					\verticallycentertext{#1}%
+				}%
+			\end{minipage}
+		\end{minipage}}
+		\column{\GLOBALtabularframecontentwidthright\linewidth}%
+		\centering%
+		{\begin{minipage}[t][\GLOBALtabularframecontentheight \textheight][t]{\dimexpr\textwidth - 10\fboxrule}%
+			\vspace{\tabularframepaddingtop em}%
+			\hspace{\tabularframepaddingleft em}%
+			\begin{minipage}[t][\dimexpr\GLOBALtabularframecontentheight \textheight-\tabularframepaddingtop em][t]{\dimexpr\linewidth - \tabularframepaddingleft em - \tabularframepaddingright em}%
+				\GLOBALtabularframecontentrightfontsize%
+				\ifthenelse{\equal{\GLOBALtabularframecontentrightcentered}{false}}{%
+					#2%
+				}{%
+					\vspace{-0.5\baselineskip}%
+					\verticallycentertext{#2}%
+				}%
+			\end{minipage}
+		\end{minipage}}
+	\end{columns}
+	\ifthenelse{\equal{\GLOBALtabularframeupdateleftcontent}{true}}{%
+		\immediate\openout\filetabularframeleftcontent=\jobname.tframelc%
+		\immediate\write\filetabularframeleftcontent{\unexpanded{#1}\LOCALpercentchar}%
+		\immediate\closeout\filetabularframeleftcontent%
+	}{}%
+	\def\LOCALtabularframeinit {false}%
+	\global\def\GLOBALtabularframeupdateleftcontent {true}%
+}
+
+% Repite el contenido de la columna izquierda del último tabular frame
+\newcommand{\tabularframerepeatleftcolumn}{%
+	\ifthenelse{\equal{\thetabularcolnumber}{-1}}{}{%
+		\throwwarning{Funcion \noexpand\tabularframerepeatleftcolumn no puede usarse sin haber inicializado \noexpand\tabularframehead}\stop}%
+	\input{\jobname.tframelc}%
+	\global\def\GLOBALtabularframeupdateleftcontent {false}%
+}
+
+% Tabular frame de una sola columna
+%	#1	Color, si vacío usa por defecto el color de columna izquierda
+%	#2	Contenido
+\newcommand{\tabularframesinglecontent}[2][]{%
+	\ifthenelse{\equal{\thetabularcolnumber}{-1}}{}{%
+		\throwwarning{Funcion \noexpand\tabularframesinglecontent no puede usarse sin haber inicializado \noexpand\tabularframehead}\stop}%
+	\emptyvarerr{\tabularframesinglecontent}{#2}{Contenido no definido}%
+	\vspace{-2.5\fboxrule}%
+	\ifx\hfuzz#1\hfuzz%
+		\def\tabularframesinglecontentemptycolor {bg}%
+		\usebeamercolor[fg]{block body}%
+	\else%
+		\def\tabularframesinglecontentemptycolor {#1}%
+	\fi%
+	\begin{columns}[t,onlytextwidth]%
+		\column{1\linewidth}%
+		\colorbox{\tabularframesinglecontentemptycolor}%
+		{\begin{minipage}[t][\GLOBALtabularframecontentheight \textheight][t]{\dimexpr\textwidth - 15\fboxrule}%
+			\vspace{\tabularframepaddingtop em}%
+			\hspace{\tabularframepaddingleft em}%
+			\begin{minipage}[t][\dimexpr\GLOBALtabularframecontentheight \textheight-\tabularframepaddingtop em][t]{\dimexpr\linewidth - \tabularframepaddingleft em - \tabularframepaddingright em}%
+				\GLOBALtabularframecontentleftfontsize%
+				\ifthenelse{\equal{\GLOBALtabularframecontentleftcentered}{false}}{%
+					#2%
+				}{%
+					\vspace{-0.5\baselineskip}%
+					\verticallycentertext{#2}%
+				}%
+			\end{minipage}
+		\end{minipage}}
+	\end{columns}
+	\def\LOCALtabularframeinit {false}%
+}

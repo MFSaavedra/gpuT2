@@ -1,0 +1,45 @@
+% Template:     Auxiliares LaTeX
+% Documento:    Funciones exclusivas de Template-Auxiliar
+% Versión:      DEV
+% Codificación: UTF-8
+%
+% Autor: Pablo Pizarro R.
+%        pablo@ppizarror.com
+%
+% Manual template: [https://latex.ppizarror.com/auxiliares]
+% Licencia MIT:    [https://opensource.org/licenses/MIT]
+
+% COMPILACION
+% - environments.tex -> {references, anexo, columna}
+
+% Configuraciones base
+\def\anumsecaddtocounter {false}
+\newcounter{totalquestions}
+\setcounter{totalquestions}{1}
+
+% Insertar nuevo título de pregunta
+%	#1	Título
+\newcommand{\newquestion}[1]{%
+	\emptyvarerr{\newquestion}{#1}{Titulo pregunta no definido}%
+	\sectionanum{#1}%
+}
+
+% Insertar nuevo título de pregunta encerrado en un recuadro
+%	#1	Número pregunta
+\newcommand{\newboxquestion}[1]{%
+	\emptyvarerr{\newquestion}{#1}{Titulo pregunta no definido}%
+	\phantomsection%
+	\newp \fbox{\ \textbf{#1}.-\ } \noindent%
+	\pdfbookmark{#1}{question.\thetotalquestions}%
+	\stepcounter{totalquestions}%
+}
+
+% Crea un entorno para definir el tamaño de bloque
+%	#1	Tamaño de fuente en pt
+\newenvironment{fontsizeblock}[1][\documentfontsize]{%
+	\changefontsizes{#1 pt}
+}{%
+	\changefontsizes{\documentfontsize pt}
+}
+
+% END

@@ -1,0 +1,44 @@
+% Template:     Presentación LaTeX
+% Documento:    Configuración de página
+% Versión:      DEV
+% Codificación: UTF-8
+%
+% Autor: Pablo Pizarro R.
+%        pablo@ppizarror.com
+%
+% Manual template: [https://latex.ppizarror.com/presentacion]
+% Licencia MIT:    [https://opensource.org/licenses/MIT]
+
+% COMPILACIÓN
+% - Reemplaza cada bloque en pageconf de compilado de Auxiliares
+
+% -------------------------------------------------------------------------
+	% Numeración de páginas
+	% -------------------------------------------------------------------------
+	\setcounter{page}{1}
+	\setcounter{footnote}{0}
+
+% -------------------------------------------------------------------------
+	% Definición de nombres de objetos
+	% -------------------------------------------------------------------------
+	\renewcommand{\appendixname}{\nameltappendixsection} % Nombre del anexo (título)
+	\renewcommand{\figurename}{\nameltwfigure} % Nombre de la leyenda de las fig.
+	\renewcommand{\lstlistingname}{\nameltwsrc} % Nombre leyenda del código fuente
+	\renewcommand{\refname}{\namereferences} % Nombre de las referencias (bibtex)
+	\renewcommand{\bibname}{\namereferences} % Nombre de las referencias (natbib)
+	\renewcommand{\tablename}{\nameltwtable} % Nombre de la leyenda de tablas
+
+% -------------------------------------------------------------------------
+	% Estilo de títulos
+	% -------------------------------------------------------------------------
+	\def\bibfont {\fontsizerefbibl} % Tamaño de fuente de las referencias
+
+	% -------------------------------------------------------------------------
+	% Configura el tabularframe
+	% -------------------------------------------------------------------------
+	\tabularframecfg{0.05}{0.7}{0.4}{0.6} % Tamaño header, contenido, col. izq., col. der.
+	\tabularframecfgalign{false}{true} % Centrado columna izquierda, derecha
+	\tabularframecfgfontsize{\normalsize}{\normalsize} % Tamaño fuente izquierda, derecha
+	\tabularframebartextcfg{\normalsize}{true} % Tamaño, centrado
+
+% END

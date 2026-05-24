@@ -1,0 +1,190 @@
+% Configuración de referencias y citas
+% -----------------------------------------------------------------------------
+\ifthenelse{\equal{\stylecitereferences}{bibtex}}{
+	\bibliographystyle{\bibtexstyle}
+	\newlength{\bibitemsep}
+	\setlength{\bibitemsep}{.2\baselineskip plus .05\baselineskip minus .05\baselineskip}
+	\newlength{\bibparskip}\setlength{\bibparskip}{0pt}
+	\let\oldthebibliography\thebibliography
+	\renewcommand\thebibliography[1]{
+		\oldthebibliography{#1}
+		\setlength{\parskip}{\bibitemsep}
+		\setlength{\itemsep}{\bibparskip}
+	}
+	\setlength{\bibitemsep}{\bibtexrefsep pt}
+}{
+\ifthenelse{\equal{\stylecitereferences}{custom}}{
+	\coretemplatemessage{Usando estilo citas referencias custom, importar librerias y configuraciones posterior al llamado de template.tex en archivo principal}
+}{
+	\throwbadconfig{Estilo citas desconocido}{\stylecitereferences}{bibtex,custom}}
+}
+
+% Justificación de textos
+% -----------------------------------------------------------------------------
+\ifthenelse{\equal{\frametextjustified}{true}}{
+	\apptocmd{\frame}{}{\justifying}{}
+}{}
+\newcommand{\justifytext}[1]{\parbox{\linewidth}{#1}}
+
+% Word-break en citas
+% -----------------------------------------------------------------------------
+\makeatletter
+\let\@cite@ofmt\@firstofone
+\makeatother
+
+% Configura footnotes
+% -----------------------------------------------------------------------------
+\let\oldfootnote\footnote
+\renewcommand\footnote[1][]{\oldfootnote[frame,#1]}
+
+% Corrige espaciamiento de itemize
+% -----------------------------------------------------------------------------
+\ifthenelse{\equal{\itemizedeleteleftmargin}{true}}{
+	\setlist[itemize]{leftmargin=*}
+	\setlist[enumerate]{leftmargin=*}
+}{}
+
+% Cambios generales en presentación
+% -----------------------------------------------------------------------------
+% \let\Tiny=\tiny % https://tex.stackexchange.com/q/58087/5764
+% Desactiva color links en headline y footline
+\makeatletter
+	\renewcommand\insertshorttitle[1][]{%
+		\beamer@setupshort{#1}%
+		\let\thanks=\@gobble%
+		\ifnum\c@page=1%
+		\hyperlinkpresentationend{\beamer@insertshort{\usebeamercolor*[fg]{title in head/foot}\beamer@shorttitle}}%
+		\else%
+		\hyperlinkpresentationstart{\beamer@insertshort{\usebeamercolor*[fg]{title in head/foot}\beamer@shorttitle}}%
+		\fi%
+	}
+	\newcommand\disablebeamercolorlinks{\def\HyColor@UseColor##1{}}
+\makeatletter
+\addtobeamertemplate{headline}{\disablebeamercolorlinks{}}{}
+\addtobeamertemplate{footline}{\disablebeamercolorlinks{}}{}
+% Modifica color de fondo de la página
+\setbeamercolor{background canvas}{bg=\pagescolor}
+% Desactiva color de tablas en entornos matemáticos
+\makeatletter
+\pretocmd\env@cases{\def\@rowc@lors{}}{}{}
+\pretocmd\start@align{\def\@rowc@lors{}}{}{}
+\makeatother
+
+% Configura los bloques
+% -----------------------------------------------------------------------------
+% Normal
+\addtobeamertemplate{block begin}{}{
+	\setlength\abovedisplayskip{0pt}%
+	\vspace{\dimexpr-0.7em + \blockpaddingtop em} % Padding superior bloque
+	\begin{adjustwidth}{%
+		\dimexpr-0.4em + \blockpaddingleft em % Padding izquierdo bloque
+	}{
+		\dimexpr-0.4em + \blockpaddingright em % Padding derecho bloque
+	}
+}
+\addtobeamertemplate{block end}{
+	\end{adjustwidth}
+	\vspace{\dimexpr-0.6em + \blockpaddingbottom em} % Padding inferior bloque
+}{
+	\vspace{\dimexpr-1.07em + \blockmarginbottom em} % Margen inferior bloque
+}
+% Alerta
+\addtobeamertemplate{block alerted begin}{}{
+	\setlength\abovedisplayskip{0pt}%
+	\vspace{\dimexpr-0.7em + \blockpaddingtop em} % Padding superior alerta
+	\begin{adjustwidth}{%
+			\dimexpr-0.4em + \blockpaddingleft em % Padding izquierdo alerta
+		}{
+			\dimexpr-0.4em + \blockpaddingright em % Padding derecho alerta
+		}
+	}
+\addtobeamertemplate{block alerted end}{
+	\end{adjustwidth}
+	\vspace{\dimexpr-0.6em + \blockpaddingbottom em} % Padding inferior alerta
+}{
+	\vspace{\dimexpr-1.07em + \blockmarginbottom em} % Margen inferior alerta
+}
+% Ejemplo
+\addtobeamertemplate{block example begin}{}{
+	\setlength\abovedisplayskip{0pt}%
+	\vspace{\dimexpr-0.7em + \blockpaddingtop em} % Padding superior ejemplo
+	\begin{adjustwidth}{%
+			\dimexpr-0.4em + \blockpaddingleft em % Padding izquierdo ejemplo
+		}{
+			\dimexpr-0.4em + \blockpaddingright em % Padding derecho ejemplo
+		}
+	}
+\addtobeamertemplate{block example end}{
+	\end{adjustwidth}
+	\vspace{\dimexpr-0.6em + \blockpaddingbottom em} % Padding inferior ejemplo
+}{
+	\vspace{\dimexpr-1.07em + \blockmarginbottom em} % Margen inferior ejemplo
+}
+
+% Definición de entornos beamer
+% -----------------------------------------------------------------------------
+\newenvironment<>{blockjustified}[1]{%
+	\begin{block}#2{#1}\justifying
+}{%
+	\end{block}
+}
+\newenvironment<>{alertblockjustified}[1]{%
+	\begin{alertblock}#2{#1}\justifying
+}{%
+	\end{alertblock}
+}
+\newenvironment<>{exampleblockjustified}[1]{%
+	\begin{exampleblock}#2{#1}\justifying
+}{%
+	\end{exampleblock}
+}
+
+% Establece temas custom
+% -----------------------------------------------------------------------------
+\makeatletter
+\ifthenelse{\equal{\GLOBALcustombeamertheme}{}}{%
+}{
+\ifthenelse{\equal{\GLOBALcustombeamertheme}{FrankfurtBottom}}{%
+	\usetheme{Frankfurt}%
+	\setbeamertemplate{frametitle}[default][colsep=-4bp,rounded=false,shadow=false]%
+	\setbeamertemplate{headline}{}%
+	\setbeamertemplate{footline}{%
+		\hypersetup{hidelinks}%
+		\pgfuseshading{beamer@barshade}%
+		\vskip-0.05ex%
+		\begin{beamercolorbox}[wd=\paperwidth,ht=1ex,dp=0ex]{empty}
+			\begin{pgfpicture}
+				\begin{pgfscope}%
+					\ifbeamer@sb@subsection%
+					\pgfsetfillcolor{subsection in head/foot.bg}%
+					\else%
+					\pgfsetfillcolor{section in head/foot.bg}%
+					\fi%
+					\pgfpathrectangle{\pgfpoint{-.5\paperwidth}{-0.5ex}}{\pgfpoint{\paperwidth}{1ex}}%
+					\pgfsetfading{beamer@belowframetitlemask}{}%
+					\pgfusepath{fill}%
+				\end{pgfscope}%
+			\end{pgfpicture}%
+		\end{beamercolorbox}%
+		\ifbeamer@sb@subsection%
+		\vskip-9.75ex%
+		\else%
+		\vskip-6.85ex%
+		\fi%
+		\begin{beamercolorbox}[ignorebg,ht=2.25ex,dp=3.75ex]{section in head/foot}
+			\insertnavigation{\paperwidth}
+		\end{beamercolorbox}%
+		\ifbeamer@sb@subsection%
+		\begin{beamercolorbox}[ignorebg,ht=2.125ex,dp=1.125ex,%
+			leftskip=.3cm,rightskip=.3cm plus1fil]{subsection in head/foot}
+			\usebeamerfont{subsection in head/foot}\insertsubsectionhead
+		\end{beamercolorbox}%
+		\fi%
+	}
+}{
+	\errmessage{Tema no existe}
+	\stop
+}}
+\makeatother
+
+% END

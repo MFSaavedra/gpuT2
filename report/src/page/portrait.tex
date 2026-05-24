@@ -1,0 +1,949 @@
+% Template:     Informe LaTeX
+% Documento:    Definición de portadas
+% Versión:      DEV
+% Codificación: UTF-8
+%
+% Autor: Pablo Pizarro R.
+%        pablo@ppizarror.com
+%
+% Manual template: [https://latex.ppizarror.com/informe]
+% Licencia MIT:    [https://opensource.org/licenses/MIT]
+
+\newcommand{\COREwriteheaderitem}[2][]{\ifthenelse{\equal{#2}{\xspace}}{#1}{#2 ~ \\}}
+\newcommand{\COREwriteheaderitemsc}[2][]{\ifthenelse{\equal{#2}{\xspace}}{#1}{\small \scshape{\MakeUppercase{#2}} ~ \\}}
+
+\newcommand{\templatePortrait}{%
+	
+	% Se escribe el header de la portada
+	\clearpage
+	\renewcommand{\thepage}{\nameportraitpage} % !NL
+	
+	% Portada por estilo
+	\ifthenelse{\equal{\portraitstyle}{style1}}{%
+		\setpagemargincm{\pagemarginleft}{\firstpagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		% Escribe el header
+		\fancypagestyle{portraitstyle}{%
+			\fancyhf{}
+			\fancyhead[L]{%
+				\COREwriteheaderitem{\universityname}
+				\COREwriteheaderitem{\universityfaculty}
+				\COREwriteheaderitem{\universitydepartment}
+				\vspace{-0.95\baselineskip}
+			}
+			\fancyhead[R]{%
+				\hspace{-0.255cm}%
+				\coreinsertkeyimage{\universitydepartmentimagecfg}{\universitydepartmentimage}%
+				\vspace{-0.175cm}%
+			}
+		}
+		\thispagestyle{portraitstyle}
+		\begin{spacing}{1.025}
+		
+		% Título y tema a tratar
+		~ \\
+		\vfill
+		\begin{center}
+			\textcolor{\portraittitlecolor}{%
+				{\noindent \Huge{\documenttitle} \vspace{0.5cm}} ~ \\
+				{\noindent \large{\documentsubject}}
+			}
+		\end{center}
+		
+		% Tabla de integrantes
+		\vfill
+		\noindent
+		\begin{minipage}{1.0\linewidth}%
+			\begin{flushright}%
+				\authortable%
+			\end{flushright}
+		\end{minipage}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style2}}{%
+		\setpagemargincm{\pagemarginleft}{\firstpagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		% Escribe el header
+		\fancypagestyle{portraitstyle}{%
+			\fancyhf{}
+			\fancyhead[L]{%
+				\COREwriteheaderitem{\universityname}
+				\COREwriteheaderitem{\universityfaculty}
+				\COREwriteheaderitem{\universitydepartment}
+				\vspace{-0.95\baselineskip}
+			}
+			\fancyhead[R]{%
+				\hspace{-0.255cm}%
+				\coreinsertkeyimage{\universitydepartmentimagecfg}{\universitydepartmentimage}%
+				\vspace{-0.175cm}%
+			}
+		}
+		\thispagestyle{portraitstyle}
+		\begin{spacing}{1.025}
+		
+		% Nombre de curso y título
+		~ \\
+		\vfill
+		\begin{center}
+			{\noindent \LARGE{\coursename} \vspace{0.3cm}} ~ \\
+			\vspace*{1.5cm}
+			\textcolor{\portraittitlecolor}{%
+				{\centering \noindent \Huge{\documenttitle} \vspace{0.3cm}} ~ \\
+				{\noindent \large{\documentsubject}}
+			}
+		\end{center}
+		
+		% Tabla de integrantes
+		\vfill
+		\noindent
+		\begin{minipage}{1.0\linewidth}%
+			\begin{flushright}%
+				\authortable%
+			\end{flushright}
+		\end{minipage}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style3}}{%
+		\setpagemargincm{\pagemarginleft}{\firstpagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		% Escribe el header
+		\fancypagestyle{portraitstyle}{%
+			\fancyhf{}
+			\fancyhead[L]{%
+				\COREwriteheaderitem{\universityname}
+				\COREwriteheaderitem{\universityfaculty}
+				\COREwriteheaderitem{\universitydepartment}
+				\vspace{-0.95\baselineskip}
+			}
+			\fancyhead[R]{%
+				\hspace{-0.255cm}%
+				\coreinsertkeyimage{\universitydepartmentimagecfg}{\universitydepartmentimage}%
+				\vspace{-0.175cm}%
+			}
+		}
+		\thispagestyle{portraitstyle}
+		\begin{spacing}{1.025}
+		
+		% Curso y código - título informe
+		~ \\
+		\vfill
+		\begin{center}
+			\vspace*{-1.0cm}
+			{\noindent \huge{\coursename} \vspace{0.3cm}} ~ \\
+			{\noindent \large{Código del curso: \coursecode}} ~ \\
+			\vspace*{1.8cm}
+			\textcolor{\portraittitlecolor}{%
+				{\noindent \Huge{\documenttitle} \vspace{0.3cm}} ~ \\
+				{\noindent \large{\documentsubject}}
+			}
+		\end{center}
+		
+		% Tabla de integrantes
+		\vfill
+		\noindent
+		\begin{minipage}{1.0\linewidth}%
+			\begin{flushright}%
+				\authortable%
+			\end{flushright}
+		\end{minipage}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style4}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\thispagestyle{empty}
+		\begin{spacing}{1.025}
+		
+		\checkextravarexist{\portraitimageF}{[portrait-style4] Defina la ubicacion de la imagen extra de la portada}
+		\checkextravarexist{\portraitimageparamsF}{[portrait-style4] Defina los parametros de la imagen extra de la portada}
+		
+		% Escribe el header
+		\vspace*{-1.5cm}
+		\noindent \coreinsertkeyimage{\portraitimageparamsF}{\portraitimageF}
+		\hspace*{-0.15cm}
+		\begin{tabular}{l}
+			% Inserta nuevas lineas independiente de si tiene texto o no
+			\COREwriteheaderitemsc[~ \\]{\universityname}
+			\COREwriteheaderitemsc[~ \\]{\universityfaculty}
+			\COREwriteheaderitemsc[~ \\]{\universitydepartment}
+			\vspace*{1.25cm}\mbox{}
+		\end{tabular}
+		
+		% Título portada - curso
+		\vfill
+		\begin{center}
+			{\fontsize{22pt}{10pt} \selectfont
+				\noindent \textcolor{\portraittitlecolor}{\documenttitle} \vspace*{0.35cm}} ~ \\
+			{\noindent \fontsize{10pt}{5pt} \selectfont \textcolor{\portraittitlecolor}{\coursecode\ \hfpdashcharstyle\ \coursename}} ~ \\
+			\vspace*{3cm}
+		\end{center}
+		
+		% Tabla de integrantes
+		\vfill
+		\noindent
+		\begin{minipage}{1.0\linewidth}%
+			\begin{flushright}%
+				\authortable%
+			\end{flushright}
+		\end{minipage}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style5}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\thispagestyle{empty}
+		\begin{spacing}{1.025}
+		
+		\checkextravarexist{\portraitimageG}{[portrait-style5] Defina la ubicacion de la imagen extra de la portada}
+		\checkextravarexist{\portraitimageparamsG}{[portrait-style5] Defina los parametros de la imagen extra de la portada}
+		
+		% Escribe el header
+		\coreinsertkeyimage{\portraitimageparamsG}{\portraitimageG}
+		\hspace{-0.2cm}
+		\begin{tabular}{l}
+			% Inserta nuevas lineas independiente de si tiene texto o no
+			\COREwriteheaderitemsc[~ \\]{\universityname}
+			\COREwriteheaderitemsc[~ \\]{\universityfaculty}
+			\COREwriteheaderitemsc[~ \\]{\universitydepartment}
+			\vspace*{1.25cm}\mbox{}
+		\end{tabular}
+		
+		% Título informe - tema
+		\vfill
+		\begin{center}
+			\fontsize{8mm}{9mm}\selectfont
+			\textcolor{\portraittitlecolor}{%
+				\noindent \documenttitle ~ \\
+			}
+			\vspace*{0.35cm}
+			\Large{\noindent \textcolor{\portraittitlecolor}{\documentsubject}} ~ \\
+			\vspace*{1cm}
+			\footnotesize{\coursecode\ \hfpdashcharstyle\ \coursename} ~ \\
+			\vspace*{1.4cm}
+		\end{center}
+		
+		% Tabla de integrantes
+		\vfill
+		\begin{center}%
+			\noindent \normalsize{\authortable}%
+		\end{center}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style6}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\thispagestyle{empty}
+		\begin{spacing}{1.025}
+		
+		\checkextravarexist{\portraitimageH}{[portrait-style6] Defina la ubicacion de la imagen extra de la portada}
+		\checkextravarexist{\portraitimageparamsH}{[portrait-style6] Defina los parametros de la imagen extra de la portada}
+		
+		% Escribe el header
+		\begin{wrapfigure}{l}{0.305\linewidth}%
+			\vspace{-0.69cm}%
+			\noindent \hspace{-0.85cm}%
+			\coreinsertkeyimage{\portraitimageparamsH}{\portraitimageH}%
+		\end{wrapfigure}
+		\def\COREstylefirstmargin {-2.2cm}
+		\ifthenelse{\equal{\universitydepartment}{\xspace}}{}{%
+			\hspace*{0.07cm}
+			\noindent \textsc{\color{red} \hspace{\COREstylefirstmargin} \universitydepartment} ~ \\
+			\def\COREstylefirstmargin {-1.6cm}
+		}
+		\ifthenelse{\equal{\universityfaculty}{\xspace}}{}{%
+			\hspace*{0cm}
+			\noindent \textsc{\color{dkgray} \hspace{\COREstylefirstmargin} \universityfaculty} ~ \\
+			\def\COREstylefirstmargin {-1.6cm}
+		}
+		\ifthenelse{\equal{\universityname}{\xspace}}{}{%
+			\hspace*{0cm}
+			\noindent \textsc{\color{dkgray} \hspace{\COREstylefirstmargin} \universityname} ~ \\
+			\def\COREstylefirstmargin {-1.6cm}
+		}
+		\ifthenelse{\equal{\coursename}{\xspace}}{}{%
+			\hspace*{0cm}
+			\noindent \textsc{\color{dkgray} \hspace{\COREstylefirstmargin} \coursecode \coursename} ~ \\
+			\def\COREstylefirstmargin {-1.6cm}
+		}
+		
+		% Título informe - tema
+		\vfill
+		\begin{center}
+			\vspace*{0.5cm}
+			{\color{dkgray} \Large \textbf{\MakeUppercase{\documentsubject}}} ~ \\
+			\noindent \rule{\linewidth}{0.3mm} ~ \\
+			\Huge \textup \bfseries \textsc{\textcolor{\portraittitlecolor}{\documenttitle}} ~ \\
+			\noindent \rule{\linewidth}{0.3mm} ~ \\
+		\end{center}
+		\begin{minipage}{.5\linewidth}
+			~
+		\end{minipage}
+		
+		% Tabla de integrantes
+		\vfill
+		\begin{minipage}{1.0\linewidth}%
+			\begin{flushright}%
+				\noindent \authortable%
+			\end{flushright}
+		\end{minipage}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style7}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\thispagestyle{empty}
+		\begin{spacing}{1.025}
+		
+		% Escribe el header
+		\begin{center}
+			\vspace*{-1.5cm}
+			\hspace*{-1.25cm}
+			\coreinsertkeyimage{\universitydepartmentimagecfg}{\universitydepartmentimage}
+			\hspace*{-0.25cm}
+			\begin{tabular}{l}
+				\vspace*{0.26cm}\mbox{} ~ \\
+				\COREwriteheaderitemsc{\universityname}
+				\COREwriteheaderitemsc{\universityfaculty}
+				\COREwriteheaderitemsc{\universitydepartment}
+				\vspace*{1.25cm}\mbox{}
+			\end{tabular}
+		\end{center}
+		
+		% Título informe - tema
+		\vfill
+		\begin{center}
+			\noindent \rule{\linewidth}{0.4mm} \\ \vspace{0.3cm}
+			{\huge \textcolor{\portraittitlecolor}{\documenttitle} \vspace{0.2cm} ~ \\}
+			\noindent \rule{\linewidth}{0.4mm} ~ \\ \vspace{0cm}
+			{\large \textcolor{\portraittitlecolor}{\documentsubject} ~ \\}
+		\end{center}
+		
+		% Tabla de integrantes
+		\vfill
+		\noindent
+		\begin{minipage}{1.0\linewidth}%
+			\begin{flushright}%
+				\scshape{\authortable}%
+			\end{flushright}
+		\end{minipage}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style8}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\thispagestyle{empty}
+		\begin{spacing}{1.025}
+		
+		% Escribe el header
+		\begin{center}
+			\vspace*{-1.0cm}
+			\begin{tabular}{c}
+				\coreinsertkeyimage{\universitydepartmentimagecfg}{\universitydepartmentimage} \vspace{0.5cm} ~ \\
+				\COREwriteheaderitemsc{\universityname}
+				\COREwriteheaderitemsc{\universityfaculty}
+				\COREwriteheaderitemsc{\universitydepartment}
+			\end{tabular}
+		\end{center}
+		
+		% Título informe - tema
+		\vfill
+		\begin{center}
+			\noindent \rule{\linewidth}{0.4mm} \\ \vspace{0.3cm}
+			{\huge \textcolor{\portraittitlecolor}{\documenttitle} \vspace{0.2cm} ~ \\}
+			\noindent \rule{\linewidth}{0.4mm} ~ \\ \vspace{0cm}
+			{\large \textcolor{\portraittitlecolor}{\documentsubject} ~ \\}
+		\end{center}
+		
+		% Tabla de integrantes
+		\vfill
+		\noindent
+		\begin{minipage}{1.0\linewidth}%
+			\begin{flushright}%
+				\scshape{\authortable}%
+			\end{flushright}
+		\end{minipage}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style9}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\thispagestyle{empty}
+		\begin{spacing}{1.025}
+		
+		% Título del informe
+		\noindent \hspace{-0.10cm} \coreinsertkeyimage{\universitydepartmentimagecfg}{\universitydepartmentimage}
+		\vfill
+		\begin{center}
+			\noindent \rule{\linewidth}{0.4mm} \\ \vspace{0.3cm}
+			{\huge \textcolor{\portraittitlecolor}{\documenttitle} \vspace{0.2cm} \\}
+			\noindent \rule{\linewidth}{0.4mm} \\ \vspace{0.35cm}
+			{\large \textcolor{\portraittitlecolor}{\documentsubject} \\}
+		\end{center}
+		
+		% Nombre universidad - departamento
+		\vfill
+		\begin{center}
+			\begin{tabular}{c}
+				\COREwriteheaderitemsc{\universityname}
+				\COREwriteheaderitemsc{\universityfaculty}
+				\COREwriteheaderitemsc{\universitydepartment}
+			\end{tabular}
+		\end{center}
+		
+		% Tabla de integrantes
+		\vfill
+		\begin{center}%
+			\indent \scshape{\authortable}%
+		\end{center}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style10}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\thispagestyle{empty}
+		\begin{spacing}{1.025}
+		
+		% Header
+		~ \\
+		\vfill
+		\begin{center}
+			\ifthenelse{\equal{\universityname}{\xspace}}{%
+				\noindent {\large \textsc{\universitydepartment}}
+			}{%
+				\noindent {\large \textsc{\universityname, \universitydepartment}}
+			}
+			\vspace{1.0cm}
+		\end{center}
+		
+		% Título informe
+		\vfill
+		\begin{center}
+			\ifthenelse{\equal{\coursename}{\xspace}}{}{%
+				\noindent {\large \scshape{\coursename}} \vspace{0.5cm} ~ \\
+			}
+			\ifthenelse{\equal{\coursecode}{\xspace}}{}{%
+				\noindent {\large \scshape{\coursecode}} \vspace{0.5cm} ~ \\
+			}
+			\noindent \rule{\linewidth}{0.4mm} \\ \vspace{0.3cm}
+			{\huge \bfseries \textcolor{\portraittitlecolor}{\documenttitle} \vspace{0.2cm} \\}
+			\noindent \rule{\linewidth}{0.4mm} \\ \vspace{2.5cm}
+		\end{center}
+		
+		% Tabla de integrantes
+		\vfill
+		\begin{center}%
+			\indent \authortable%
+		\end{center}
+		\vfill
+		~ \\
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style11}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\thispagestyle{empty}
+		\begin{spacing}{1.025}
+		
+		% Header
+		\begin{center}
+			\vspace*{-1.0cm}
+			\ifthenelse{\equal{\universityname}{\xspace}}{}{%
+				\scshape{\universityname} ~ \\
+			}
+			\ifthenelse{\equal{\universityfaculty}{\xspace}}{}{%
+				\scshape{\universityfaculty} ~ \\
+			}
+			\ifthenelse{\equal{\universitydepartment}{\xspace}}{}{%
+				\scshape{\universitydepartment}
+			}
+		\end{center}
+		
+		% Título informe
+		\vfill
+		\begin{center}
+			{\setstretch{1.2} \fontsize{21pt}{22pt} \selectfont \textcolor{\portraittitlecolor}{\scshape{\documenttitle}} \vspace{0.5cm}} ~ \\
+			{\fontsize{13pt}{10pt} \selectfont \textcolor{\portraittitlecolor}{\scshape{\documentsubject}}}
+		\end{center}
+		
+		% Tabla de integrantes
+		\vfill
+		\begin{center}%
+			\indent \authortable%
+		\end{center}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style12}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\thispagestyle{empty}
+		\begin{spacing}{1.025}
+		
+		% Imagen departamento
+		\begin{center}
+			\vspace*{-1.0cm}
+			\coreinsertkeyimage{\universitydepartmentimagecfg}{\universitydepartmentimage}
+		\end{center}
+		
+		% Título informe
+		\vfill
+		\begin{center}
+			{\bf \Huge \scshape{\textcolor{\portraittitlecolor}{\documenttitle}} \vspace{0.3cm}} \\
+			{\bf \Large \textcolor{\portraittitlecolor}{\documentsubject}}
+		\end{center}
+		
+		% Tabla de integrantes
+		\vfill
+		\begin{flushright}%
+			\noindent \authortable
+		\end{flushright}
+		
+		% Footer
+		\vspace{0.5cm}
+		\noindent \rule{\linewidth}{0.4mm}
+		\begin{center}
+			\ifthenelse{\equal{\universityname}{\xspace}}{%
+				\scshape{\universityfaculty} \\
+			}{%
+				\scshape{\universityname, \universityfaculty} \\
+			}
+			\scshape{\universitydepartment}
+		\end{center}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style13}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\thispagestyle{empty}
+		\begin{spacing}{1.025}
+		
+		% Header
+		\noindent
+		\vspace*{-1.5cm}
+		\begin{flushleft}
+			\begin{minipage}{0.625\linewidth}
+				% Aqui no se puede hacer nada con \universitydepartment
+				\ifthenelse{\equal{\universityname}{\xspace}}{%
+					{\fontsize{3.5mm}{0.5mm} \selectfont \noindent \textsf{\universityfaculty}} ~ \\
+				}{%
+					{\fontsize{3.5mm}{0.5mm} \selectfont \noindent \textsf{\universityname, \universityfaculty}} ~ \\
+				}
+				\noindent {\fontsize{3.0mm}{0.5mm} \selectfont \textsf{\universitydepartment} \vspace{-0.3cm}} ~ \\
+				\noindent \textcolor{gray}{\rule{\linewidth}{0.2mm}}
+			\end{minipage}
+		\end{flushleft}
+		\vspace*{-2cm}
+		\begin{flushright}%
+			\begin{minipage}{0.3\linewidth}%
+				\hspace*{-0.255cm}%
+				\coreinsertkeyimage{\universitydepartmentimagecfg}{\universitydepartmentimage}%
+			\end{minipage}
+		\end{flushright}
+		
+		% Título informe
+		\vfill
+		\begin{center}
+			\begin{minipage}{0.9\linewidth}
+				\begin{framed}
+					\LARGE
+					\vspace{1cm}
+					\centering \textcolor{\portraittitlecolor}{\textbf{\documenttitle}}
+					\vspace{1cm}
+				\end{framed}
+			\end{minipage}
+		\end{center}
+		
+		% Tabla de integrantes
+		\vfill
+		\begin{flushright}%
+			\noindent \textsf{\authortable}%
+		\end{flushright}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style14}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\thispagestyle{empty}
+		\begin{spacing}{1.025}
+		
+		% Header
+		\noindent
+		\begin{flushleft}%
+			\vspace*{-1.0cm}%
+			\coreinsertkeyimage{\universitydepartmentimagecfg}{\universitydepartmentimage} \\
+		\end{flushleft}
+		
+		% Título del informe
+		\vfill
+		{\bf \huge \noindent \textcolor{\portraittitlecolor}{\textsf{\MakeUppercase{\documenttitle}} \vspace*{0.05cm}}} \\
+		{\bf \large \noindent \textcolor{\portraittitlecolor}{\textsf{\MakeUppercase{\documentsubject}}}} \\
+		
+		% Tabla de integrantes
+		\vfill
+		\begin{flushright}%
+			\noindent \textsf{\authortable}%
+		\end{flushright}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style15}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\thispagestyle{empty}
+		\begin{spacing}{1.025}
+		
+		\checkextravarexist{\portraitimageA}{[portrait-style15] Defina la ubicacion de la imagen extra de la portada}
+		\checkextravarexist{\portraitimageparamsA}{[portrait-style15] Defina los parametros de la imagen extra de la portada}
+		\checkextravarexist{\portraitimagerightA}{[portrait-style15] Defina la ubicacion de la imagen extra derecha de la portada}
+		\checkextravarexist{\portraitimagerightparamsA}{[portrait-style15] Defina los parametros de la imagen extra derecha de la portada}
+		
+		% Header
+		\vspace*{-1.5cm}
+		\noindent \begin{minipage}{0.8\linewidth}
+			\noindent \begin{minipage}{0.21\linewidth}
+				\coreinsertkeyimage{\portraitimageparamsA}{\portraitimageA} \\
+			\end{minipage}
+			\hspace{-0.25cm}
+			\begin{minipage}{0.6\linewidth}
+				\begin{flushleft}
+					\vspace*{-0.05cm}
+					\textsc{%
+					\begin{tabular}{l}
+						\ifthenelse{\equal{\universityname}{\xspace}}{}{%
+							{\small \universityname} ~ \\
+						}
+						\ifthenelse{\equal{\universityfaculty}{\xspace}}{}{%
+							{\small \universityfaculty} ~ \\
+						}
+						\ifthenelse{\equal{\universitydepartment}{\xspace}}{}{%
+							{\small \universitydepartment}
+						}
+					\end{tabular}
+					}
+				\end{flushleft}
+			\end{minipage}
+		\end{minipage}
+		\noindent \begin{minipage}{0.2\linewidth}%
+			\begin{flushright}%
+				\ifthenelse{\isundefined{\portraitimagerightA}}{}{%
+					\ifthenelse{\isundefined{\portraitimagerightparamsA}}{}{%
+						\noindent \coreinsertkeyimage{\portraitimagerightparamsA}{\portraitimagerightA} \\
+					}
+				}
+			\end{flushright}
+		\end{minipage}
+		
+		% Título informe
+		\vfill
+		\begin{center}
+			{\fontsize{25pt}{15pt} \selectfont \textcolor{\portraittitlecolor}{\textbf{\documenttitle}} \vspace{0.7cm}} \\
+			{\Large \textcolor{\portraittitlecolor}{\documentsubject}}
+		\end{center}
+		
+		% Tabla de integrantes
+		\vfill
+		\begin{center}%
+			\noindent \authortable%
+		\end{center}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style16}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\checkextravarexist{\portraitbackgroundimageB}{[portrait-style16] Defina la ubicacion del fondo de la portada}
+		\checkextravarexist{\portraitbackgroundcolorB}{[portrait-style16] Defina el color del bloque del titulo de la portada}
+		
+		% Imagen fondo, título informe
+		\begingroup
+			\thispagestyle{empty}
+			\begin{tikzpicture}[remember picture,overlay]
+				\node[inner sep=0pt] (background) at (current page.center) {\includegraphics[width=\paperwidth]{\portraitbackgroundimageB}};
+				\draw (current page.center) node [fill=\portraitbackgroundcolorB!30!white,fill opacity=0.6,text opacity=1,inner sep=1cm]{\Huge\centering\bfseries\sffamily\parbox[c][][t]{\paperwidth}{%
+						\centering \textcolor{\portraittitlecolor}{\documenttitle} \\ [10pt]
+						{\Large \textcolor{\portraittitlecolor}{\documentsubject}} \\ [25pt]
+						{\huge \documentauthor}}};
+			\end{tikzpicture}
+			\vfill
+		\endgroup
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style17}}{%
+		\setpagemargincm{\pagemarginleft}{\firstpagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\checkextravarexist{\portraitimageC}{[portrait-style17] Defina la ubicacion de la imagen extra de la portada}
+		\checkextravarexist{\portraitimageboxedC}{[portrait-style17] Defina si la imagen de la portada se encierra en un recuadro}
+		\checkextravarexist{\portraitimageboxedwidthC}{[portrait-style17] Defina el grosor del recuadro de la imagen de la portada}
+		\checkextravarexist{\portraitimageparamsC}{[portrait-style17] Defina los parametros de la imagen de la portada}
+		
+		% Header
+		\fancypagestyle{portraitstyle}{%
+			\fancyhf{}
+			\fancyhead[L]{%
+				\COREwriteheaderitem{\universityname}
+				\COREwriteheaderitem{\universityfaculty}
+				\COREwriteheaderitem{\universitydepartment}
+				\vspace{-0.95\baselineskip}
+			}
+			\fancyhead[R]{%
+				\hspace{-0.255cm}%
+				\coreinsertkeyimage{\universitydepartmentimagecfg}{\universitydepartmentimage}%
+				\vspace{-0.175cm}%
+			}
+		}
+		\thispagestyle{portraitstyle}
+		\begin{spacing}{1.025}
+		
+		% Título del informe
+		~ \\
+		\vfill
+		\begin{center}
+			\textcolor{\portraittitlecolor}{%
+				{\noindent \Huge{\documenttitle} \vspace{0.5cm}} ~ \\
+				{\noindent \large{\documentsubject}}
+			}
+		\end{center}
+		
+		% Imagen de la portada
+		~ \\
+		\vspace{2\baselineskip}
+		\begin{center}
+			\ifthenelse{\equal{\portraitimageboxedC}{true}}{%
+				\begingroup
+				\setlength{\fboxsep}{0 pt}
+				\setlength{\fboxrule}{\portraitimageboxedwidthC pt}
+				\fbox{\coreinsertkeyimage{\portraitimageparamsC}{\portraitimageC}}%
+				\endgroup
+			}{%
+				\coreinsertkeyimage{\portraitimageparamsC}{\portraitimageC}
+			}
+		\end{center}
+		~ \\
+		\vfill
+		
+		% Tabla de integrantes
+		\noindent
+		\begin{minipage}{1.0\linewidth}%
+			\begin{flushright}%
+				\authortable%
+			\end{flushright}
+		\end{minipage}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style18}}{%
+		\setpagemargincm{\pagemarginleft}{\firstpagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\checkextravarexist{\portraitimageD}{[portrait-style18] Defina la ubicacion de la imagen extra de la portada}
+		\checkextravarexist{\portraitimageboxedD}{[portrait-style18] Defina si la imagen de la portada se encierra en un recuadro}
+		\checkextravarexist{\portraitimageboxedwidthD}{[portrait-style18] Defina el grosor del recuadro de la imagen de la portada}
+		\checkextravarexist{\portraitimageparamsD}{[portrait-style18] Defina los parametros de la imagen de la portada}
+		
+		% Header
+		\fancypagestyle{portraitstyle}{%
+			\fancyhf{}
+			\fancyhead[L]{%
+				\COREwriteheaderitem{\universityname}
+				\COREwriteheaderitem{\universityfaculty}
+				\COREwriteheaderitem{\universitydepartment}
+				\vspace{-0.95\baselineskip}
+			}
+			\fancyhead[R]{%
+				\hspace{-0.255cm}%
+				\coreinsertkeyimage{\universitydepartmentimagecfg}{\universitydepartmentimage}%
+				\vspace{-0.175cm}%
+			}
+		}
+		\thispagestyle{portraitstyle}
+		\begin{spacing}{1.025}
+		
+		% Imagen de la portada
+		~ \\
+		\begin{center}
+			\ifthenelse{\equal{\portraitimageboxedD}{true}}{%
+				\begingroup
+				\setlength{\fboxsep}{0 pt}
+				\setlength{\fboxrule}{\portraitimageboxedwidthD pt}
+				\fbox{\coreinsertkeyimage{\portraitimageparamsD}{\portraitimageD}}%
+				\endgroup
+			}{%
+				\coreinsertkeyimage{\portraitimageparamsD}{\portraitimageD}
+			}
+		\end{center}
+		\vspace{-2\baselineskip}
+		
+		% Título del informe
+		\vfill
+		\begin{center}
+			\textcolor{\portraittitlecolor}{%
+				{\noindent \Huge{\documenttitle} \vspace{0.5cm}} ~ \\
+				{\noindent \large{\documentsubject}}
+			}
+		\end{center}
+		\vfill
+		
+		% Tabla de integrantes
+		\noindent
+		\begin{minipage}{1.0\linewidth}%
+			\begin{flushright}%
+				\authortable%
+			\end{flushright}
+		\end{minipage}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style19}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\thispagestyle{empty}
+		\begin{spacing}{1.025}
+		
+		% Título informe
+		\vspace*{1.5cm}
+		\begin{center}
+			\noindent \rule{\linewidth}{0.4mm} \\ \vspace{0.3cm}
+			{\huge \bfseries \textcolor{\portraittitlecolor}{\documenttitle} \vspace{0.2cm} \\}
+			\noindent \rule{\linewidth}{0.4mm}
+		\end{center}
+		
+		% Nombre universidad
+		~ \\
+		\begin{center}
+			\noindent {\large \scshape{\coursecode} \large \scshape{\coursename}} \vspace{0.5cm} ~ \\
+			\ifthenelse{\equal{\universityname}{\xspace}}{%
+				\noindent {\large \textsc{\universitydepartment}}
+			}{%
+				\noindent {\large \textsc{\universityname, \universitydepartment}}
+			}
+			\vspace{1.0cm}
+		\end{center}
+		
+		% Tabla de integrantes
+		\vfill
+		\begin{center}
+			\indent \authortable%
+		\end{center}
+		~ \\
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style20}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		
+		\thispagestyle{empty}
+		\begin{spacing}{1.025}
+		
+		\checkextravarexist{\portraitverticalspaceE}{[portrait-style20] Defina el espaciamiento vertical de la portada}
+		
+		{\raggedleft	
+		\noindent \rule{1pt}{\textheight}
+		\hspace{0.05\linewidth}
+		\parbox[b]{0.75\linewidth}{%
+			{\Huge\bfseries \textcolor{\portraittitlecolor}{\documenttitle}}\\[2\baselineskip]
+			{\large\textit{\textcolor{\portraittitlecolor}{\documentsubject}}}\\[4\baselineskip]
+			\vspace*{2cm}
+			{\textsc{%
+			\begin{flushleft}
+				\noindent\hspace{-0.36cm}\authortable
+			\end{flushleft}
+			}}
+			
+			\vspace*{\portraitverticalspaceE}
+			
+			{\noindent \universityname ~ \\
+			\universityfaculty ~ \\
+			\universitydepartment}\\[\baselineskip]
+		}}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{style21}}{%
+		\setpagemargincm{\pagemarginleft}{\firstpagemargintop}{\pagemarginright}{\pagemarginbottom}
+			
+		\checkextravarexist{\portraitimageI}{[portrait-style21] Defina la ubicacion de la imagen extra de la portada}
+		\checkextravarexist{\portraitimageboxedI}{[portrait-style21] Defina si la imagen de la portada se encierra en un recuadro}
+		\checkextravarexist{\portraitimageboxedwidthI}{[portrait-style21] Defina el grosor del recuadro de la imagen de la portada}
+		\checkextravarexist{\portraitimageparamsI}{[portrait-style21] Defina los parametros de la imagen de la portada}
+		
+		% Header
+		\fancypagestyle{portraitstyle}{%
+			\fancyhf{}
+			\fancyhead[L]{%
+				\COREwriteheaderitem{\universityname}
+				\COREwriteheaderitem{\universityfaculty}
+				\COREwriteheaderitem{\universitydepartment}
+				\vspace{-0.95\baselineskip}
+			}
+			\fancyhead[R]{%
+				\hspace{-0.255cm}%
+				\coreinsertkeyimage{\universitydepartmentimagecfg}{\universitydepartmentimage}%
+				\vspace{-0.175cm}%
+			}
+		}
+		\thispagestyle{portraitstyle}
+		\begin{spacing}{1.025}
+		
+		% Imagen de la portada
+		~ \vfill
+		\begin{center}
+			\ifthenelse{\equal{\portraitimageboxedI}{true}}{%
+				\begingroup
+				\setlength{\fboxsep}{0 pt}
+				\setlength{\fboxrule}{\portraitimageboxedwidthI pt}
+				\fbox{\coreinsertkeyimage{\portraitimageparamsI}{\portraitimageC}}%
+				\endgroup
+			}{%
+				\coreinsertkeyimage{\portraitimageparamsI}{\portraitimageC}
+			}
+		\end{center}
+		~ \vfill
+		
+		% Tabla de integrantes
+		\noindent
+		\begin{minipage}{1.0\linewidth}%
+			\begin{flushright}%
+				\authortable%
+			\end{flushright}
+		\end{minipage}
+		\end{spacing}
+	}{%
+	\ifthenelse{\equal{\portraitstyle}{\bgtemplatetestcode}}{%
+		\setpagemargincm{\pagemarginleft}{\pagemargintop}{\pagemarginright}{\pagemarginbottom}
+		\pagestyle{empty}
+		\pagecolor{lbrown}
+		\begin{spacing}{1.025}
+		\begin{center}
+			\vspace*{-1.0cm}
+			\ifthenelse{\equal{\universityname}{\xspace}}{}{%
+				\scshape{\universityname} ~ \\
+			}
+			\ifthenelse{\equal{\universityfaculty}{\xspace}}{}{%
+				\scshape{\universityfaculty} ~ \\
+			}
+			\ifthenelse{\equal{\universitydepartment}{\xspace}}{}{%
+				\scshape{\universitydepartment}
+			}
+		\end{center}
+		~ \\
+		\begin{center}
+			\bgtemplatetestimg
+		\end{center}
+		\begin{center}
+			\vspace*{-6cm}
+			{\setstretch{1.2} \fontsize{25pt}{22pt} \selectfont \textcolor{\portraittitlecolor}{\scshape{\documenttitle}} \vspace{0.5cm}} \\
+			{\fontsize{15pt}{10pt} \selectfont \textcolor{\portraittitlecolor}{\scshape{\documentsubject}}}
+		\end{center}
+		\vfill
+		\begin{flushright}
+			\noindent \authortable%
+		\end{flushright}
+		\end{spacing}
+		\clearpage
+		\pagecolor{\pagescolor}
+	}{%
+		\throwbadconfigondoc{Estilo de portada incorrecto}{\portraitstyle}{style1 .. style21}}}}}}}}}}}}}}}}}}}}}}
+	}
+	
+	% -------------------------------------------------------------------------
+	% Añade una página en blanco al imprimir por las dos caras
+	% -------------------------------------------------------------------------
+	\ifthenelse{\equal{\GLOBALtwoside}{true}}{%
+		\insertemptypage%
+		\addtocounter{page}{-1}}{%
+	}
+	
+}
+
+% END

@@ -1,0 +1,33 @@
+% Configura las listas
+% -----------------------------------------------------------------------------
+\makeatletter
+\def\@listi{\leftmargin\leftmarginii
+	\topsep 1ex % espaciado anterior
+	\parsep 0\p@ \@plus\p@
+	\itemsep 0.5ex} % espaciado ítem
+\makeatother
+
+% Configura las ecuaciones
+% -----------------------------------------------------------------------------
+\setlength\belowdisplayshortskip{2ex}
+
+% Configura los caption
+% -----------------------------------------------------------------------------
+\captionsetup[lstlisting]{margin={0pt,5pt}}
+
+% Configura los colores
+% -----------------------------------------------------------------------------
+\makeatletter
+\pretocmd\env@cases{\def\@rowc@lors{}}{}{}
+\pretocmd\start@align{\def\@rowc@lors{}}{}{}
+\makeatother
+
+% Define el tamaño de página
+% -----------------------------------------------------------------------------
+% (N+1)*\sepwidth + N*\colwidth = \paperwidth
+\newlength{\sepwidth}
+\newlength{\colwidth}
+\setlength{\sepwidth}{\colseparation}
+\setlength{\colwidth}{\dimexpr(\paperwidth - \colnumbers\sepwidth - \sepwidth)/\colnumbers}
+
+% END

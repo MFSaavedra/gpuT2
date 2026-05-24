@@ -1,0 +1,222 @@
+% Template:     Informe LaTeX
+% Documento:    Archivo principal - Tarea 2 (Game of Life en CPU, CUDA y OpenCL)
+% Codificación: UTF-8
+
+% CREACIÓN DEL DOCUMENTO
+\documentclass[
+	spanish,
+	letterpaper, oneside
+]{article}
+
+% INFORMACIÓN DEL DOCUMENTO
+\def\documenttitle {Tarea 2: OpenCL y CUDA}
+\def\documentsubtitle {Juego de la Vida de Conway en CPU y GPU}
+\def\documentsubject {Computación en GPU}
+
+\def\documentauthor {Matías Saavedra}
+\def\coursename {Computación en GPU}
+\def\coursecode {CC7515-1}
+
+\def\universityname {Universidad de Chile}
+\def\universityfaculty {Facultad de Ciencias Físicas y Matemáticas}
+\def\universitydepartment {Departamento de Ciencias de la Computación}
+\def\universitydepartmentimage {departamentos/dcc}
+\def\universitydepartmentimagecfg {height=1.57cm}
+\def\universitylocation {Santiago de Chile}
+
+% INTEGRANTES, PROFESORES Y FECHAS
+\def\authortable {
+	\begin{tabular}{ll}
+		Integrante:
+		& \begin{tabular}[t]{l}
+			Matías Saavedra
+		\end{tabular} \\
+		Profesora:
+		& \begin{tabular}[t]{l}
+			Nancy Hitschfeld K.
+		\end{tabular} \\
+		Auxiliar:
+		& \begin{tabular}[t]{l}
+			Gustavo Medel
+		\end{tabular} \\
+		Ayudante:
+		& \begin{tabular}[t]{l}
+			Catalina Gajardo
+		\end{tabular} \\
+		& \\
+		\multicolumn{2}{l}{Fecha de entrega: \today} \\
+		\multicolumn{2}{l}{\universitylocation}
+	\end{tabular}
+}
+
+% IMPORTACIÓN DEL TEMPLATE
+\input{template}
+
+% INICIO DE PÁGINAS
+\begin{document}
+
+% PORTADA
+\templatePortrait
+
+% CONFIGURACIÓN DE PÁGINA Y ENCABEZADOS
+\templatePagecfg
+
+% RESUMEN O ABSTRACT
+\begin{abstractd}
+	Este informe describe el desarrollo y evaluación de tres implementaciones
+	del Juego de la Vida de Conway: una versión secuencial en CPU, una
+	versión paralela en CUDA y una versión paralela en OpenCL. Se incluye
+	una variación de las reglas originales en la que una célula muerta
+	también nace si tiene exactamente $6$ vecinos vivos. Se miden las
+	células evaluadas por segundo para distintos tamaños de cuadrícula
+	$N \times M$, se comparan dos variaciones de configuración del kernel
+	GPU, y se analizan los \emph{speed-up} respecto de la implementación en
+	CPU para determinar a partir de qué tamaño de cuadrícula resulta
+	conveniente utilizar la GPU.
+\end{abstractd}
+
+% TABLA DE CONTENIDOS - ÍNDICE
+\templateIndex
+
+% CONFIGURACIONES FINALES
+\templateFinalcfg
+
+% ======================= INICIO DEL DOCUMENTO =======================
+
+\section{Introducción}
+\label{sec:introduccion}
+
+% (0.5 pt)
+%   - Breve descripción del problema.
+%   - Resultados esperados.
+
+El Juego de la Vida de Conway es un autómata celular bidimensional en el
+que cada celda de una grilla $N \times M$ se encuentra viva o muerta y
+evoluciona en pasos discretos según el estado de sus ocho vecinos. En esta
+tarea se considera la variación de las reglas estándar dada por:
+
+\begin{itemize}
+	\item Una célula nace en un espacio muerto si tiene exactamente $3$ vecinos vivos.
+	\item Una célula sobrevive a la próxima generación si tiene $2$ o $3$ vecinos vivos.
+	\item Una célula también nace en un espacio muerto si tiene exactamente $6$ vecinos vivos.
+\end{itemize}
+
+El objetivo es implementar el algoritmo en CPU (secuencial), CUDA y OpenCL,
+medir su rendimiento en células evaluadas por segundo, y analizar el
+\emph{speed-up} respecto de la versión secuencial.
+
+\subsection{Resultados esperados}
+\label{sec:resultados-esperados}
+
+Se espera que las implementaciones en GPU superen significativamente a la
+CPU para grillas grandes, donde el paralelismo de datos se vuelve dominante
+frente al costo de transferencias de memoria entre host y device. Para
+grillas pequeñas, en cambio, se espera que el costo de lanzamiento del
+kernel y de transferencia haga que la CPU sea competitiva o incluso más
+rápida.
+
+\section{Implementación}
+\label{sec:implementacion}
+
+% (1.0 pt)
+%   - Implementación secuencial.
+%   - Implementación paralela en CUDA.
+%   - Implementación paralela en OpenCL.
+%   - Variaciones en configuración.
+
+\subsection{Implementación secuencial en CPU}
+\label{sec:impl-cpu}
+
+Describir aquí la estructura del programa secuencial: representación de la
+grilla como arreglo plano de \texttt{unsigned char}, doble buffer
+(\texttt{current}/\texttt{next}), recorrido por filas y columnas, y conteo
+de vecinos con condiciones de borde.
+
+\subsection{Implementación paralela en CUDA}
+\label{sec:impl-cuda}
+
+Describir aquí la organización del \emph{grid} y los \emph{blocks}, el
+mapeo de un hilo por celda, el uso (o no) de memoria compartida con
+\emph{halo}, y la sincronización entre generaciones.
+
+\subsection{Implementación paralela en OpenCL}
+\label{sec:impl-opencl}
+
+Describir aquí la creación del contexto, la cola de comandos, la
+compilación del kernel y la configuración del \emph{work-group}. Notar las
+diferencias con CUDA.
+
+\subsection{Variaciones en configuración}
+\label{sec:variaciones}
+
+Se eligieron las siguientes dos opciones a comparar (de las tres
+disponibles en el enunciado):
+
+\begin{enumerate}
+	\item Tamaños de bloque $32$, $64$, $128$ y $256$.
+	\item Uso de memoria local por bloque \emph{vs.} sin memoria local.
+\end{enumerate}
+
+% Reemplazar por la elección real si difiere.
+
+\section{Resultados}
+\label{sec:resultados}
+
+% (2.0 pt)
+%   - Describir experimentos a realizar.
+%   - Resultados por tamaño de cuadrícula (CPU/GPU).
+%   - Resultados de experimentos para las opciones elegidas.
+
+\subsection{Diseño de experimentos}
+\label{sec:experimentos}
+
+Se midió el número de células evaluadas por segundo en grillas cuadradas
+de tamaños $N \in \{128, 256, 512, 1024, 2048, 4096\}$, ejecutando un
+número fijo de generaciones por configuración y promediando varias
+corridas independientes.
+
+\subsection{CPU vs GPU por tamaño de cuadrícula}
+\label{sec:res-cpu-gpu}
+
+Insertar aquí la tabla y gráficos comparativos.
+
+\subsection{Resultados de las opciones elegidas}
+\label{sec:res-opciones}
+
+Insertar aquí las curvas para cada tamaño de bloque y para la comparación
+con/sin memoria local.
+
+\section{Análisis de resultados}
+\label{sec:analisis}
+
+% (1.5 pt)
+%   - Speed-up comparando versiones paralelas con CPU.
+%   - Calcular desde qué tamaño de cuadrícula conviene usar la GPU.
+
+\subsection{Speed-up}
+\label{sec:speedup}
+
+Reportar $S(N) = T_{\text{CPU}}(N) / T_{\text{GPU}}(N)$ para cada
+configuración.
+
+\subsection{Umbral de conveniencia GPU}
+\label{sec:umbral}
+
+Identificar el tamaño de grilla a partir del cual $S(N) > 1$ de manera
+sostenida.
+
+\subsection{Perfilamiento (Nsight / Chrono)}
+\label{sec:profiling}
+
+Describir hallazgos del \emph{profiling} de la mejor solución CUDA con
+Nsight (o Nvprof) y de la mejor solución OpenCL con \texttt{std::chrono}.
+
+\section{Conclusiones}
+\label{sec:conclusiones}
+
+% (1.0 pt)
+
+Resumir los principales hallazgos y limitaciones encontradas.
+
+% FIN DEL DOCUMENTO
+\end{document}
