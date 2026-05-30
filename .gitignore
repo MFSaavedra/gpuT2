@@ -1,7 +1,55 @@
+# ----------------------------------------------------------------------------
+# Build output
+# ----------------------------------------------------------------------------
+/build/
+build*/
+cmake-build-*/          # CLion out-of-source builds
+compile_commands.json   # generated; lives under build/ but often symlinked to root
+
+# ----------------------------------------------------------------------------
+# CUDA / OpenCL compiler intermediates
+# ----------------------------------------------------------------------------
 *.i
 *.ii
 *.gpu
 *.ptx
 *.cubin
 *.fatbin
-*.clangd
+
+# ----------------------------------------------------------------------------
+# Editor / tooling (keep the tracked .clangd config; ignore only its cache)
+# ----------------------------------------------------------------------------
+.cache/
+.vscode/
+.idea/
+*.swp
+
+# ----------------------------------------------------------------------------
+# Analysis artifacts (results/*.csv are deliverables — do NOT ignore them)
+# ----------------------------------------------------------------------------
+.ipynb_checkpoints/
+
+# ----------------------------------------------------------------------------
+# LaTeX build artifacts (report/). Image PDFs under report/img/ and the
+# assignment PDF are tracked, so do NOT blanket-ignore *.pdf.
+# ----------------------------------------------------------------------------
+/report/main.pdf
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.log
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+
+# ----------------------------------------------------------------------------
+# OS cruft
+# ----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db

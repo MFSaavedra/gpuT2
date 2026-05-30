@@ -21,14 +21,16 @@ endif()
 
 include(GoogleTest)
 
-add_executable(GameOfLife_tests
-    test1.cpp
+# Compile-smoke test: includes every interface-layer header so the scaffolding is
+# verified to build before any engine/renderer bodies exist.
+add_executable(gol_tests
+    compile_smoke_test.cpp
 )
 
-target_link_libraries(GameOfLife_tests
+target_link_libraries(gol_tests
     PRIVATE
-        GameOfLife_lib
+        gol_core
         GTest::gtest_main
 )
 
-gtest_discover_tests(GameOfLife_tests)
+gtest_discover_tests(gol_tests)
