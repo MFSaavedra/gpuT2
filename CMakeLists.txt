@@ -7,30 +7,42 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 enable_testing()
 
 # ----------------------------------------------------------------------------
-# Core: backend-agnostic interface layer (Grid, Config, LifeRules, ISimEngine,
-# IRenderer, patterns). Header-only for now, so this is an INTERFACE target that
-# just propagates the include directory and the C++23 requirement. It becomes a
-# STATIC library once src/core/Grid.cpp and src/core/Config.cpp are implemented.
+# Core: backend-agnostic layer (Grid, Config + CLI, LifeRules, ISimEngine,
+# IRenderer, patterns + RLE loader). A STATIC library now that the parsing and
+# pattern sources exist; the header-only pieces (Grid, LifeRules, Timer) still
+# live entirely in include/.
 # ----------------------------------------------------------------------------
-add_library(gol_core INTERFACE)
-target_include_directories(gol_core INTERFACE
+add_library(gol_core STATIC
+    src/core/Config.cpp
+    src/patterns/Pattern.cpp
+    src/patterns/RleLoader.cpp
+)
+target_include_directories(gol_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_compile_features(gol_core INTERFACE cxx_std_23)
+target_compile_features(gol_core PUBLIC cxx_std_23)
 
 # ----------------------------------------------------------------------------
-# CPU engine (always built once its source exists). The CpuEngine.cpp body is
-# the next pass; the target is wired here but skipped until the source lands so
-# the default configuration builds cleanly today.
-#
-#   add_library(gol_cpu src/engines/cpu/CpuEngine.cpp)
-#   target_link_libraries(gol_cpu PUBLIC gol_core)
+# CPU engine (always built — no toolkit required). One implementation serves both
+# the sequential baseline (1 core) and the data-parallel mode (N cores).
 # ----------------------------------------------------------------------------
-set(_cpu_src ${CMAKE_CURRENT_SOURCE_DIR}/src/engines/cpu/CpuEngine.cpp)
-if(EXISTS ${_cpu_src})
-    add_library(gol_cpu ${_cpu_src})
-    target_link_libraries(gol_cpu PUBLIC gol_core)
-endif()
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+add_library(gol_cpu src/engines/cpu/CpuEngine.cpp)
+target_link_libraries(gol_cpu PUBLIC gol_core Threads::Threads)
+
+# ----------------------------------------------------------------------------
+# Renderers (NullRenderer is header-only; TextRenderer has a body).
+# ----------------------------------------------------------------------------
+add_library(gol_render src/render/TextRenderer.cpp)
+target_link_libraries(gol_render PUBLIC gol_core)
+
+# ----------------------------------------------------------------------------
+# Application: owns the loop and wires a chosen engine + renderer (CPU + null/text
+# today). Builds and runs with no CUDA toolkit and no OpenCL present.
+# ----------------------------------------------------------------------------
+add_executable(gol src/core/main.cpp)
+target_link_libraries(gol PRIVATE gol_core gol_cpu gol_render)
 
 # ----------------------------------------------------------------------------
 # Optional CUDA engine (opt-in, and only once its sources exist).

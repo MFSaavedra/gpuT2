@@ -1,0 +1,7 @@
+#N BirthOnSix
+#C Exercises the variant-only rule. The centre cell (1,1) is dead but has exactly
+#C 6 live neighbours, so it MUST come alive next generation. Under vanilla Conway
+#C (birth only on 3) it would stay dead — this is the case that catches a missing
+#C "birth on 6".
+x = 3, y = 3, rule = B36/S23
+3o$obo$o!

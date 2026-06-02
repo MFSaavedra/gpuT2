@@ -26,6 +26,12 @@ struct Config {
   EngineKind engine = EngineKind::Cpu;
   RendererKind renderer = RendererKind::Null;
 
+  // CPU engine: number of worker cores. 1 = sequential baseline; N = data-parallel
+  // over row blocks; 0 = use all hardware cores. Sequential and parallel run the
+  // identical per-cell rule — more cores only partition the rows, never change the
+  // result (see CpuEngine).
+  unsigned threads = 1;
+
   // GPU kernel-config knobs swept in the report. blockSize is the total threads
   // per block ({32, 64, 128, 256}); the GPU engines map it onto a 2D tile.
   int blockSize = 256;

@@ -34,3 +34,26 @@ target_link_libraries(gol_tests
 )
 
 gtest_discover_tests(gol_tests)
+
+# Engine + loader tests: CpuEngine correctness under the variant rule, the RLE
+# loader, and the sequential-vs-parallel equivalence. PATTERNS_DIR points the
+# tests at the repo's RLE fixtures regardless of the working directory.
+add_executable(gol_engine_tests
+    rules_test.cpp
+    rle_loader_test.cpp
+    cpu_parallel_test.cpp
+)
+
+target_link_libraries(gol_engine_tests
+    PRIVATE
+        gol_core
+        gol_cpu
+        GTest::gtest_main
+)
+
+target_compile_definitions(gol_engine_tests
+    PRIVATE
+        PATTERNS_DIR="${CMAKE_SOURCE_DIR}/patterns"
+)
+
+gtest_discover_tests(gol_engine_tests)

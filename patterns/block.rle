@@ -1,0 +1,5 @@
+#N Block
+#C 2x2 still life. Each live cell keeps exactly 3 live neighbours, so under the
+#C variant rule (survive on 2 or 3) the whole block is stationary.
+x = 2, y = 2, rule = B36/S23
+2o$2o!

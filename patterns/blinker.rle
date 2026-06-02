@@ -1,0 +1,6 @@
+#N Blinker
+#C Period-2 oscillator: a horizontal bar of 3 flips between horizontal and
+#C vertical each generation. Neighbour counts stay <= 3, so the variant rule
+#C behaves like vanilla Conway here.
+x = 3, y = 1, rule = B36/S23
+3o!
