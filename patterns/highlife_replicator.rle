@@ -1,0 +1,13 @@
+#N Replicator
+#O Nathan Thompson
+#C The minimal HighLife (B36/S23) replicator: a 12-cell pattern that copies
+#C itself diagonally. Its replication is driven by the variant's birth-on-6 rule,
+#C so it is the cleanest visual showcase of what makes this rule NOT vanilla Conway.
+#C Source: conwaylife.com/wiki/HighLife
+#C
+#C Verified against Golly's reference engine (bgolly) and reproduced bit-for-bit by
+#C CpuEngine. Population doubles every replication: gen 0 -> 12, gen 12 -> 24,
+#C gen 36 -> 48 cells. Run with margin so copies don't hit the bounded edge, e.g.:
+#C   ./gol -r 22 -c 22 -g 12 --rle patterns/highlife_replicator.rle --renderer text
+x = 5, y = 5, rule = B36/S23
+2b3o$bo2bo$o3bo$o2bob$3o!

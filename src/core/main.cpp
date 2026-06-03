@@ -57,6 +57,11 @@ int main(int argc, char** argv) {
 
     engine.upload(grid);
 
+    // Generation 0 is the seed itself: render it before the first step so the
+    // displayed frames are seed, step 1, step 2, ... with honest labels. The
+    // benchmark path (NullRenderer) skips this, so timing is unaffected.
+    if (rendering) renderer->render(grid, 0);
+
     Timer wall;
     double kernelMs = 0.0;
     for (std::uint64_t gen = 0; gen < cfg.generations; ++gen) {
@@ -64,7 +69,7 @@ int main(int argc, char** argv) {
       kernelMs += engine.lastKernelMillis();
       if (rendering) {
         engine.download(grid);
-        renderer->render(grid, gen);
+        renderer->render(grid, gen + 1); // state after `gen + 1` steps
         if (renderer->shouldClose()) break;
       }
     }

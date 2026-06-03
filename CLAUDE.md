@@ -10,18 +10,28 @@ cells-evaluated-per-second across grid sizes and report the GPU speed-up vs CPU.
 
 **Rule variant (do not use vanilla Conway rules):** a dead cell is born on **exactly 3 OR exactly 6**
 live neighbours; a live cell survives on 2 or 3. The extra "birth on 6" rule is the one detail that's
-easy to get wrong — it must hold in every implementation (CPU, CUDA, OpenCL).
+easy to get wrong — it must hold in every implementation (CPU, CUDA, OpenCL). This is the named rule
+**HighLife** (`B36/S23`), which is convenient: Golly and other tools simulate it directly, so they can
+cross-check our backends (see Tests).
 
-## Current state — skeleton being restructured
+## Current state
 
-The repo started as a single `GameOfLife` class with a `// TODO` `step()` stub. It is being migrated to
-the engine/renderer **strategy** layout described below:
+The engine/renderer **strategy** layout below is in place. What exists and works:
 
-- The old `GameOfLife` class splits into a backend-agnostic `Grid` plus a `CpuEngine` that implements
-  `ISimEngine`. The stubbed `step()` logic becomes `CpuEngine::step()`.
-- CUDA (`CudaEngine`) and OpenCL (`OpenCLEngine`) are greenfield — no device sources exist yet.
-- GPU CMake targets are opt-in via `-DBUILD_CUDA=ON` / `-DBUILD_OPENCL=ON` and won't configure until
-  their sources exist.
+- **Core** — backend-agnostic `Grid` (header-only), `Config` + CLI parser, `LifeRules.hpp` (the shared
+  variant rule), the `Pattern` / `RleLoader` data pipeline, and the `ISimEngine` / `IRenderer` interfaces.
+- **CpuEngine** (`ISimEngine`) — implemented. A single code path serves both the **sequential** baseline
+  (`threads == 1`, no synchronisation) and the **data-parallel** mode (`threads >= 2`, a persistent worker
+  pool synchronised with `std::barrier`; `threads == 0` = all hardware cores). Both only partition the
+  rows, so they produce bit-for-bit identical boards.
+- **Renderers** — `NullRenderer` (header-only, for benchmarking) and `TextRenderer` (ASCII dump).
+- **App** — `main.cpp` owns the loop, wires a CPU engine + renderer, seeds from RLE or a deterministic
+  random fill, and prints kernel/wall cells-per-second.
+
+Still greenfield: CUDA (`CudaEngine`) and OpenCL (`OpenCLEngine`) — no device sources yet, so
+`--engine cuda|opencl` errors. GPU CMake targets are opt-in via `-DBUILD_CUDA=ON` / `-DBUILD_OPENCL=ON`
+and won't configure until their sources exist. `CpuEngine` is the reference oracle every GPU backend
+will be checked against.
 
 ## Build & test
 
@@ -61,7 +71,9 @@ Application (main loop, Config/CLI)
   '-- Grid + Patterns (shared, backend-agnostic)
 ```
 
-Loop: `engine->step()` -> `engine->download(grid)` (no-op on CPU) -> `renderer->render(grid)` -> repeat.
+Loop: render the seed as generation 0, then `engine->step()` -> (only if a renderer is attached)
+`engine->download(grid)` -> `renderer->render(grid, gen+1)` -> repeat. Under `NullRenderer` the
+download + render are skipped entirely, so host<->device transfers never enter the benchmark.
 
 Interfaces:
 
@@ -80,24 +92,27 @@ neighbour-count + birth/survive helper, qualified `__host__ __device__` under `#
 CPU and CUDA share it verbatim. OpenCL can't include C++ headers, so it mirrors the same helper in a
 plain-C `kernel.cl` that is **read at runtime** (not embedded as a string literal); keep it diff-able
 against `LifeRules.hpp`. Don't chase zero duplication between CUDA and OpenCL — it costs more clarity
-than it saves. Edge handling (bounded vs toroidal) must also be identical across backends — pick one
-and document it here.
+than it saves. Edge handling (bounded vs toroidal) must also be identical across backends. **Default is
+bounded** (out-of-range neighbours count as dead); `--wrap` selects toroidal. `CpuEngine` implements
+both, the seq-vs-parallel test covers each mode, and the GPU backends must match it bit-for-bit in both.
 
 CMake: a core library (always), a CPU engine (always), CUDA/OpenCL engine libraries gated on
 `BUILD_CUDA` / `BUILD_OPENCL`, and renderer sources. The project must build and run (CPU + text) with
 no CUDA toolkit and no OpenCL present.
 
-Suggested layout:
+Layout (parenthesised paths are planned, not yet present):
 
 ```
 include/gol/   Grid.hpp ISimEngine.hpp IRenderer.hpp Config.hpp LifeRules.hpp Timer.hpp
+               engines/CpuEngine.hpp  render/NullRenderer.hpp render/TextRenderer.hpp
                patterns/Pattern.hpp patterns/RleLoader.hpp
-src/core/      Grid.cpp Config.cpp main.cpp
-src/engines/   cpu/CpuEngine.cpp  cuda/CudaEngine.cu cuda/kernel.cu  opencl/OpenCLEngine.cpp opencl/kernel.cl
-src/render/    NullRenderer.cpp TextRenderer.cpp
-tests/         rules_test.cpp equivalence_test.cpp
-analysis/      *.ipynb results/*.csv
-data/          *.rle
+src/core/      Config.cpp main.cpp                         (Grid/LifeRules/Timer are header-only)
+src/engines/   cpu/CpuEngine.cpp  (cuda/CudaEngine.cu cuda/kernel.cu  opencl/OpenCLEngine.cpp opencl/kernel.cl)
+src/render/    TextRenderer.cpp                            (NullRenderer is header-only)
+src/patterns/  Pattern.cpp RleLoader.cpp
+tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp
+patterns/      *.rle                                       (block, blinker, birth_on_six, highlife_replicator, highlife_spaceship)
+               (analysis/ *.ipynb results/*.csv — later)
 ```
 
 Per the report plan (`report/main.tex`), the two kernel-config variations to benchmark are block sizes
@@ -131,13 +146,24 @@ so run the sweeps at large N x M.
 
 ## Tests
 
-Planned, in dependency order:
+In dependency order (`CpuEngine` is the oracle, so it is verified first):
 
-1. **CPU `CpuEngine::step()` correctness** on known patterns under the variant rule (block stays still,
-   blinker oscillates, and at least one case exercising the birth-on-6 rule).
-2. **Cross-backend equivalence**: seed CPU, CUDA, and OpenCL identically, run N generations, assert the
-   grids are bit-for-bit equal. `CpuEngine` is the reference oracle, so implement and verify it first —
-   every later backend is checked against it.
+1. **CpuEngine correctness** under the variant rule — done. Block stays still, blinker oscillates
+   period-2, and the birth-on-6 case brings a dead cell with 6 neighbours alive (`rules_test.cpp`).
+2. **Sequential vs. parallel equivalence** — done. Same seed + generations must give a bit-for-bit
+   identical board across thread counts and both edge modes, including non-divisible grids that exercise
+   the row-remainder logic (`cpu_parallel_test.cpp`).
+3. **RLE loader + `Pattern::applyTo`** — done. Parsing, stamping, clipping, missing-file errors
+   (`rle_loader_test.cpp`). `compile_smoke_test.cpp` also includes every header so the scaffolding stays
+   build-clean.
+4. **Cross-backend equivalence** — pending the GPU engines. Seed CPU/CUDA/OpenCL identically, run N
+   generations, assert bit-for-bit equality against the `CpuEngine` oracle.
+
+**Golly as an external oracle.** Golly is installed locally, including the headless `bgolly` runner
+(infinite grid, no edge effects). It runs our exact rule (`B36/S23`), so it is a second, independent
+reference: `bgolly -m <gens> -i <step> file.rle` prints populations to compare against ours. The
+`highlife_replicator.rle` / `highlife_spaceship.rle` fixtures in `patterns/` were verified this way and
+reproduce `bgolly` bit-for-bit, so they make good large-grid cross-checks for the GPU backends.
 
 ## Report
 
