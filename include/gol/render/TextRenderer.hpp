@@ -15,19 +15,22 @@ namespace gol {
 /**
  * @brief Dumps the board to stdout, one frame per generation.
  *
- * Each frame is appended (the terminal scrolls). The live-cell glyph defaults to
- * a Unicode full block (U+2588); glyphs are strings so multi-byte UTF-8 works.
- * For small demos and eyeballing correctness only -- never use it in a benchmark
- * (use NullRenderer).
+ * Each frame is appended (the terminal scrolls). To counter the ~1:2 aspect
+ * ratio of a terminal character cell, a live cell defaults to TWO full blocks
+ * ("██") and a dead cell to two spaces, so each cell reads as a square rather
+ * than a tall rectangle. Glyphs are strings so multi-byte UTF-8 works. For small
+ * demos and eyeballing correctness only -- never use it in a benchmark (use
+ * NullRenderer).
  */
 class TextRenderer final : public IRenderer {
 public:
   /**
    * @brief Construct with the glyphs used for live and dead cells.
-   * @param alive Glyph for a live cell (default: U+2588 full block "█").
-   * @param dead  Glyph for a dead cell (default: ".").
+   * @param alive Glyph for a live cell (default: two U+2588 full blocks "██").
+   * @param dead  Glyph for a dead cell (default: two spaces). Use the same
+   *              display width as @p alive so the grid stays aligned.
    */
-  explicit TextRenderer(std::string alive = "█", std::string dead = ".");
+  explicit TextRenderer(std::string alive = "██", std::string dead = "  ");
 
   /**
    * @brief Print one frame (a generation header line followed by the board).

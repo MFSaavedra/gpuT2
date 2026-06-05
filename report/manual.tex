@@ -978,11 +978,13 @@ The mechanism worth noting is that it builds the entire frame into one
 with a single \texttt{fputs}. Per-cell \texttt{putchar} would lock and flush the
 stream thousands of times per frame. \texttt{at(x, y)} keeps the
 \texttt{(column, row)} argument order matching \texttt{Grid}'s convention even
-though storage is row-major. The live-cell glyph defaults to the Unicode full
-block (U+2588) and the glyph fields are \texttt{std::string} rather than
-\texttt{char} so the multi-byte UTF-8 block fits; it is one display column wide,
-so the grid stays aligned with the one-column \texttt{.} dead cell. This renderer
-is for eyeballing correctness only --- never in a benchmark.
+though storage is row-major. A terminal character cell is about twice as tall as
+it is wide, so to make cells read as squares a live cell defaults to \emph{two}
+full blocks (U+2588) and a dead cell to two spaces; the glyph fields are
+\texttt{std::string} (not \texttt{char}) to hold the multi-byte, two-column cell,
+and \texttt{alive\_} / \texttt{dead\_} share a display width so the grid stays
+aligned. This renderer is for eyeballing correctness only --- never in a
+benchmark.
 
 \subsection{\texttt{AnsiRenderer} --- in-place animation, clipped to the viewport}
 \label{sec:ansi}
@@ -1002,7 +1004,8 @@ void AnsiRenderer::render(const Grid& grid, std::uint64_t generation) {
   unsigned termRows = 24, termCols = 80;
   terminalSize(termRows, termCols);                      // ioctl(TIOCGWINSZ), 80x24 fallback
   const std::size_t visRows = std::min(grid.rows(), termRows > 1 ? termRows - 1u : 1u);
-  const std::size_t visCols = std::min(grid.cols(), termCols);   // clip to the viewport
+  const std::size_t cellCols = std::max<std::size_t>(1, displayWidth(alive_)); // cols/cell (2 by default)
+  const std::size_t visCols = std::min(grid.cols(), termCols / cellCols);       // clip to viewport
   std::string out;
   out += "\033[?2026h";                                  // begin synchronized (atomic) update
   out += "\033[H";                                       // cursor home (overwrite, no flicker)
@@ -1029,9 +1032,12 @@ harmless. \texttt{AnsiRenderer} cannot allow wrapping, because a wrapped row
 would occupy several terminal rows and desynchronise the cursor-home arithmetic
 that the whole in-place scheme depends on. So it disables autowrap
 (\texttt{\textbackslash 033[?7l}) and renders only the top-left
-$\min(\text{rows},\,\text{term}-1)\times\min(\text{cols},\,\text{term})$ window,
-annotating the header, e.g. \texttt{generation 0 [80x23 of 300x300]}. The size is
-re-queried every frame, so resizing the terminal is handled.
+$\min(\text{rows},\,\text{term}-1)\times\min(\text{cols},\,\text{term}/\text{cell})$
+window, where \emph{cell} is the per-cell display width ($2$ for the default
+two-block glyph); it annotates the header, e.g. \texttt{generation 0 [40x23 of
+300x300]} ($300$ columns in an $80$-column terminal leaves room for $40$
+two-column cells). The size is re-queried every frame, so resizing the terminal
+is handled.
 
 \paragraph{Robustness details.} A per-frame \texttt{\textbackslash 033[?2026h/l}
 pair asks the terminal for a \emph{synchronized} (tear-free) update and is

@@ -26,8 +26,9 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   rows, so they produce bit-for-bit identical boards.
 - **Renderers** — `NullRenderer` (header-only, for benchmarking), `TextRenderer` (scrolling text
   dump), and `AnsiRenderer` (in-place ANSI animation; clips big grids to the terminal viewport). Both
-  visible renderers draw live cells as a Unicode full block `█` (U+2588) by default and dead as `.`;
-  the glyph fields are `std::string` (configurable, multi-byte UTF-8).
+  visible renderers draw each live cell as **two** full blocks `██` (U+2588) and dead as two spaces, so
+  cells read as squares despite the ~1:2 terminal cell aspect ratio; glyph fields are `std::string`
+  (configurable). `AnsiRenderer` clips by per-cell display width (2 cols/cell), not raw column count.
 - **App** — `main.cpp` owns the loop, wires a CPU engine + renderer, seeds from RLE or a deterministic
   random fill, and prints kernel/wall cells-per-second.
 

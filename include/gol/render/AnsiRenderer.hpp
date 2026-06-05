@@ -20,27 +20,32 @@ namespace gol {
  * stable animation. It hides the cursor and disables line wrapping on
  * construction and restores both on destruction (RAII).
  *
+ * Square cells: a terminal character cell is about twice as tall as it is wide,
+ * so each grid cell is drawn TWO terminal columns wide -- the live glyph defaults
+ * to two full blocks ("██") and dead to two spaces -- which reads as a square.
+ * The viewport clip below divides the terminal width by the per-cell display
+ * width accordingly. Glyphs are strings so multi-byte UTF-8 works.
+ *
  * Big grids: the board is CLIPPED to the visible terminal viewport (the top-left
  * region that fits), never wrapped -- a grid wider/taller than the terminal
  * shows a window with a "[cols x rows of W x H]" note in the header. For honest
  * benchmarks use NullRenderer; this is a small-grid visualisation aid.
  *
- * The live-cell glyph defaults to a Unicode full block (U+2588), which is one
- * display column wide so the grid stays aligned; glyphs are strings so multi-byte
- * UTF-8 works. Intended for an interactive TTY; if stdout is not a terminal the
- * size query falls back to 80x24 and the escape codes are still emitted.
+ * Intended for an interactive TTY; if stdout is not a terminal the size query
+ * falls back to 80x24 and the escape codes are still emitted.
  */
 class AnsiRenderer final : public IRenderer {
 public:
   /**
    * @brief Enter animation mode (hide cursor, disable wrap, clear the screen).
-   * @param alive   Glyph for a live cell (default: U+2588 full block "█").
-   * @param dead    Glyph for a dead cell (default: ".").
+   * @param alive   Glyph for a live cell (default: two U+2588 full blocks "██").
+   * @param dead    Glyph for a dead cell (default: two spaces). Use the same
+   *                display width as @p alive so the grid stays aligned.
    * @param delayMs Pause after each frame, in milliseconds, so the animation is
    *                watchable (the simulation loop is otherwise uncapped). 0
    *                disables the pause.
    */
-  explicit AnsiRenderer(std::string alive = "█", std::string dead = ".",
+  explicit AnsiRenderer(std::string alive = "██", std::string dead = "  ",
                         unsigned delayMs = 50);
 
   /// @brief Restore the terminal (re-enable wrap, show cursor) and drop below the frame.

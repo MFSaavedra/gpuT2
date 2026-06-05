@@ -34,6 +34,22 @@ constexpr const char* kClearToEol  = "\033[K";      // erase from cursor to end 
 constexpr const char* kClearBelow  = "\033[J";      // erase from cursor to end of screen
 
 /**
+ * @brief Display width of a glyph in terminal columns.
+ *
+ * Counts UTF-8 code points (lead bytes), assuming one column each -- true for the
+ * glyphs used here (ASCII, spaces, block elements). Double-width (East Asian
+ * Wide) characters are not accounted for.
+ * @param s Glyph string.
+ * @return Number of terminal columns the glyph occupies (>= 0).
+ */
+std::size_t displayWidth(const std::string& s) {
+  std::size_t w = 0;
+  for (unsigned char c : s)
+    if ((c & 0xC0) != 0x80) ++w; // count bytes that are not UTF-8 continuation bytes
+  return w;
+}
+
+/**
  * @brief Query the terminal size, falling back to 80x24 when stdout is not a TTY.
  * @param[out] rows Visible terminal rows.
  * @param[out] cols Visible terminal columns.
@@ -72,14 +88,20 @@ void AnsiRenderer::render(const Grid& grid, std::uint64_t generation) {
   unsigned termCols = 80;
   terminalSize(termRows, termCols);
 
+  // Each cell may be more than one terminal column wide (the default glyph is
+  // two full blocks, "██", so cells look square). Clip by DISPLAY width, not
+  // bytes: how many whole cells fit across the terminal.
+  const std::size_t cellCols =
+      std::max<std::size_t>(1, std::max(displayWidth(alive_), displayWidth(dead_)));
+
   // Reserve one row for the header; clip the board to the visible viewport so a
   // grid larger than the terminal shows a top-left window rather than wrapping.
   const std::size_t visRows =
       std::min<std::size_t>(grid.rows(), termRows > 1 ? termRows - 1u : 1u);
-  const std::size_t visCols = std::min<std::size_t>(grid.cols(), termCols);
+  const std::size_t visCols = std::min<std::size_t>(grid.cols(), termCols / cellCols);
   const bool clipped = visRows < grid.rows() || visCols < grid.cols();
 
-  const std::size_t glyph = std::max(alive_.size(), dead_.size());
+  const std::size_t glyph = std::max(alive_.size(), dead_.size()); // bytes per cell
   std::string out;
   out.reserve(visRows * (visCols * glyph + 4) + 64);
   out += kSyncBegin;
