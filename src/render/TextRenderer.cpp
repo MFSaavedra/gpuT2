@@ -1,3 +1,8 @@
+/**
+ * @file TextRenderer.cpp
+ * @brief Implementation of the ASCII renderer.
+ */
+
 #include "gol/render/TextRenderer.hpp"
 
 #include <cstdio>

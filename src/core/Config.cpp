@@ -1,3 +1,8 @@
+/**
+ * @file Config.cpp
+ * @brief Implementation of the argv -> Config parser.
+ */
+
 #include "gol/Config.hpp"
 
 #include <cstdlib>
@@ -9,6 +14,10 @@ namespace gol {
 
 namespace {
 
+/**
+ * @brief Print the usage/help text and terminate the process.
+ * @param code Process exit code (0 for `--help`, 2 for a usage error).
+ */
 [[noreturn]] void usageAndExit(int code) {
   std::cout <<
       "Conway's Game of Life (variant: born on 3 OR 6, survive on 2 or 3)\n"
@@ -31,7 +40,14 @@ namespace {
   std::exit(code);
 }
 
-// Read the value that follows a flag; errors out if it is missing.
+/**
+ * @brief Read the value that follows a flag; errors out if it is missing.
+ * @param argc Argument count.
+ * @param argv Argument vector.
+ * @param[in,out] i Index of the flag; advanced past the consumed value.
+ * @param flag Flag name, for error messages.
+ * @return The value token following the flag.
+ */
 std::string nextValue(int argc, char** argv, int& i, const char* flag) {
   if (i + 1 >= argc) {
     std::cerr << "error: " << flag << " requires a value\n";
@@ -40,6 +56,12 @@ std::string nextValue(int argc, char** argv, int& i, const char* flag) {
   return argv[++i];
 }
 
+/**
+ * @brief Parse a string to unsigned long long, erroring out on bad input.
+ * @param s    String to parse.
+ * @param flag Flag name, for error messages.
+ * @return The parsed value. Exits the process if @p s is not an integer.
+ */
 unsigned long long toULL(const std::string& s, const char* flag) {
   try {
     return std::stoull(s);

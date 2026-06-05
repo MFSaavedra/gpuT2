@@ -1,6 +1,11 @@
-// Proves the core design claim: the parallel CPU solution is the sequential one
-// with the rows partitioned across cores. Same seed + same generations must give
-// a bit-for-bit identical board regardless of thread count and edge mode.
+/**
+ * @file cpu_parallel_test.cpp
+ * @brief Sequential-vs-parallel equivalence for CpuEngine.
+ *
+ * Proves the core design claim: the parallel CPU solution is the sequential one
+ * with the rows partitioned across cores. Same seed + same generations must give
+ * a bit-for-bit identical board regardless of thread count and edge mode.
+ */
 
 #include <gtest/gtest.h>
 

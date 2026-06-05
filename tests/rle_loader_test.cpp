@@ -1,5 +1,9 @@
-// RLE loader + Pattern::applyTo tests. PATTERNS_DIR is injected by CMake and
-// points at the repo's patterns/ directory.
+/**
+ * @file rle_loader_test.cpp
+ * @brief RLE loader + Pattern::applyTo tests.
+ *
+ * PATTERNS_DIR is injected by CMake and points at the repo's patterns/ directory.
+ */
 
 #include <string>
 

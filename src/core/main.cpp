@@ -1,3 +1,9 @@
+/**
+ * @file main.cpp
+ * @brief Application entry point: parses config, wires an engine + renderer,
+ *        runs the generation loop, and prints the cells/sec metric.
+ */
+
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -17,6 +23,11 @@ using namespace gol;
 
 namespace {
 
+/**
+ * @brief Factory mapping a RendererKind to a concrete renderer.
+ * @param kind Which renderer to build.
+ * @return Owning pointer to the renderer (defaults to NullRenderer).
+ */
 std::unique_ptr<IRenderer> makeRenderer(RendererKind kind) {
   switch (kind) {
     case RendererKind::Text: return std::make_unique<TextRenderer>();
@@ -25,7 +36,12 @@ std::unique_ptr<IRenderer> makeRenderer(RendererKind kind) {
   }
 }
 
-// Seed the grid either from an RLE pattern (centred) or a deterministic random fill.
+/**
+ * @brief Seed the grid either from an RLE pattern (centred) or a deterministic
+ *        random fill.
+ * @param[in,out] grid Board to seed in place.
+ * @param cfg          Run configuration (rlePath, seed, dimensions).
+ */
 void seed(Grid& grid, const Config& cfg) {
   if (cfg.rlePath) {
     Pattern p = RleLoader::load(*cfg.rlePath);
@@ -39,6 +55,12 @@ void seed(Grid& grid, const Config& cfg) {
 
 } // namespace
 
+/**
+ * @brief Program entry point.
+ * @param argc Argument count.
+ * @param argv Argument vector.
+ * @return 0 on success, 1 on error (unsupported engine or a thrown exception).
+ */
 int main(int argc, char** argv) {
   const Config cfg = parse(argc, argv);
 

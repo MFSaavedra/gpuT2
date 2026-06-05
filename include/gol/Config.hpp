@@ -5,50 +5,81 @@
 #include <optional>
 #include <string>
 
+/**
+ * @file Config.hpp
+ * @brief Fully-resolved run configuration and the argv parser that builds it.
+ */
+
 namespace gol {
 
-// Which simulation backend to instantiate. The strategy is chosen at runtime so
-// one binary drives every benchmark configuration.
-enum class EngineKind { Cpu, Cuda, OpenCL };
-
-// Which output strategy to instantiate. Always benchmark against Null so render
-// cost never pollutes the cells/sec headline metric.
-enum class RendererKind { Null, Text };
-
-// Fully resolved run configuration. Populated by parse() from argv (or built by
-// hand in tests). Backend-agnostic: GPU-only knobs (blockSize, useShared) are
-// simply ignored by CpuEngine.
-struct Config {
-  std::size_t rows = 256;       // grid height
-  std::size_t cols = 256;       // grid width
-  std::uint64_t generations = 100; // number of steps to simulate
-
-  EngineKind engine = EngineKind::Cpu;
-  RendererKind renderer = RendererKind::Null;
-
-  // CPU engine: number of worker cores. 1 = sequential baseline; N = data-parallel
-  // over row blocks; 0 = use all hardware cores. Sequential and parallel run the
-  // identical per-cell rule — more cores only partition the rows, never change the
-  // result (see CpuEngine).
-  unsigned threads = 1;
-
-  // GPU kernel-config knobs swept in the report. blockSize is the total threads
-  // per block ({32, 64, 128, 256}); the GPU engines map it onto a 2D tile.
-  int blockSize = 256;
-  bool useShared = false; // use shared/local memory tiling on the GPU engines
-
-  // Edge handling: false = bounded (out-of-bounds neighbours count as dead),
-  // true = toroidal wrap. Must be identical across all three backends.
-  bool wrap = false;
-
-  std::uint64_t seed = 1; // seed for Grid::randomize when no pattern is loaded
-
-  // Optional RLE pattern to stamp instead of a random seed.
-  std::optional<std::string> rlePath;
+/**
+ * @brief Which simulation backend to instantiate.
+ *
+ * The strategy is chosen at runtime so one binary drives every benchmark
+ * configuration.
+ */
+enum class EngineKind {
+  Cpu,    ///< CpuEngine (sequential or data-parallel).
+  Cuda,   ///< CudaEngine (not yet implemented).
+  OpenCL  ///< OpenCLEngine (not yet implemented).
 };
 
-// Parse argv into a Config. Implemented in a later pass once the flag surface is
-// agreed; declared here so the interface layer is complete and compilable.
+/**
+ * @brief Which output strategy to instantiate.
+ *
+ * Always benchmark against Null so render cost never pollutes the cells/sec
+ * headline metric.
+ */
+enum class RendererKind {
+  Null, ///< NullRenderer: no output (use for benchmarking).
+  Text  ///< TextRenderer: ASCII dump to stdout.
+};
+
+/**
+ * @brief Fully resolved run configuration.
+ *
+ * Populated by parse() from argv (or built by hand in tests). Backend-agnostic:
+ * GPU-only knobs (blockSize, useShared) are simply ignored by CpuEngine.
+ */
+struct Config {
+  std::size_t rows = 256;          ///< Grid height.
+  std::size_t cols = 256;          ///< Grid width.
+  std::uint64_t generations = 100; ///< Number of steps to simulate.
+
+  EngineKind engine = EngineKind::Cpu;        ///< Backend to run.
+  RendererKind renderer = RendererKind::Null; ///< Output strategy.
+
+  /**
+   * @brief CPU engine worker count.
+   *
+   * 1 = sequential baseline; N = data-parallel over row blocks; 0 = use all
+   * hardware cores. Sequential and parallel run the identical per-cell rule --
+   * more cores only partition the rows, never change the result (see CpuEngine).
+   */
+  unsigned threads = 1;
+
+  int blockSize = 256;    ///< GPU threads per block ({32,64,128,256}); mapped onto a 2D tile.
+  bool useShared = false; ///< Use shared/local-memory tiling on the GPU engines.
+
+  /**
+   * @brief Edge handling.
+   *
+   * false = bounded (out-of-bounds neighbours count as dead), true = toroidal
+   * wrap. Must be identical across all three backends.
+   */
+  bool wrap = false;
+
+  std::uint64_t seed = 1; ///< Seed for Grid::randomize when no pattern is loaded.
+
+  std::optional<std::string> rlePath; ///< Optional RLE pattern to stamp instead of a random seed.
+};
+
+/**
+ * @brief Parse argv into a Config.
+ * @param argc Argument count, as received by main().
+ * @param argv Argument vector, as received by main().
+ * @return The resolved configuration. Exits the process on `--help` or a usage error.
+ */
 Config parse(int argc, char** argv);
 
 } // namespace gol

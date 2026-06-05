@@ -1,11 +1,15 @@
-// Compile-smoke test for the strategy interface layer.
-//
-// Its job is to #include every new header so the whole scaffolding is verified
-// to build (and the headers stay mutually consistent) via the normal ctest flow,
-// before any engine, renderer or kernel bodies exist. It only exercises the
-// header-only inline helpers; declared-but-undefined symbols (Config::parse,
-// RleLoader::load, Pattern::applyTo) are intentionally not called so the test
-// links without those future translation units.
+/**
+ * @file compile_smoke_test.cpp
+ * @brief Compile-smoke test for the interface layer.
+ *
+ * Includes every public header so the whole scaffolding stays build-clean and
+ * the headers remain mutually consistent via the normal ctest flow. It
+ * deliberately exercises only the header-only inline helpers (Grid,
+ * LifeRules::nextState, Timer, Config defaults). The out-of-line symbols are now
+ * implemented in gol_core (which this target links), but their behavioural
+ * coverage lives in the dedicated suites -- rules_test and cpu_parallel_test for
+ * the engine, rle_loader_test for Config-adjacent parsing and Pattern::applyTo.
+ */
 
 #include "gol/Config.hpp"
 #include "gol/Grid.hpp"

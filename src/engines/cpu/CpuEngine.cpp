@@ -1,3 +1,9 @@
+/**
+ * @file CpuEngine.cpp
+ * @brief Implementation of the CPU engine (sequential baseline + data-parallel
+ *        worker pool), the reference oracle for the GPU backends.
+ */
+
 #include "gol/engines/CpuEngine.hpp"
 
 #include <algorithm>

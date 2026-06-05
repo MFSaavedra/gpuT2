@@ -1,3 +1,8 @@
+/**
+ * @file Pattern.cpp
+ * @brief Implementation of Pattern::applyTo (stamping with clipping).
+ */
+
 #include "gol/patterns/Pattern.hpp"
 
 #include "gol/Grid.hpp"

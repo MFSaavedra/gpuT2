@@ -3,8 +3,10 @@
 # ----------------------------------------------------------------------------
 /build/
 build*/
-cmake-build-*/          # CLion out-of-source builds
-compile_commands.json   # generated; lives under build/ but often symlinked to root
+# CLion out-of-source builds
+cmake-build-*/
+# generated; lives under build/ but often symlinked to root
+compile_commands.json
 
 # ----------------------------------------------------------------------------
 # CUDA / OpenCL compiler intermediates

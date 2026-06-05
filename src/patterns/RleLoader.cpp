@@ -1,3 +1,8 @@
+/**
+ * @file RleLoader.cpp
+ * @brief Implementation of the RLE file parser.
+ */
+
 #include "gol/patterns/RleLoader.hpp"
 
 #include <algorithm>
@@ -10,7 +15,11 @@ namespace gol {
 
 namespace {
 
-// Trim ASCII whitespace from both ends of a string view, in place.
+/**
+ * @brief Trim ASCII whitespace from both ends of a string.
+ * @param s Input string.
+ * @return Copy of @p s with leading/trailing whitespace removed.
+ */
 std::string trim(const std::string& s) {
   std::size_t b = 0;
   std::size_t e = s.size();
@@ -19,9 +28,15 @@ std::string trim(const std::string& s) {
   return s.substr(b, e - b);
 }
 
-// Parse the RLE header line, e.g. "x = 3, y = 3, rule = B36/S23", filling width
-// and height. The rule field (if present) is ignored — the variant rule lives in
-// LifeRules.hpp / kernel.cl, not in the data files.
+/**
+ * @brief Parse the RLE header line, e.g. "x = 3, y = 3, rule = B36/S23".
+ *
+ * The rule field (if present) is ignored -- the variant rule lives in
+ * LifeRules.hpp / kernel.cl, not in the data files.
+ * @param line          Header line text.
+ * @param[out] width    Receives the `x` dimension.
+ * @param[out] height   Receives the `y` dimension.
+ */
 void parseHeader(const std::string& line, std::size_t& width, std::size_t& height) {
   std::size_t pos = 0;
   while (pos < line.size()) {

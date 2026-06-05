@@ -1,7 +1,11 @@
-// CpuEngine correctness on known patterns under the VARIANT rule
-// (born on exactly 3 OR exactly 6; survive on 2 or 3). CpuEngine is the
-// reference oracle every later backend is checked against, so it is verified
-// first. PATTERNS_DIR is injected by CMake.
+/**
+ * @file rules_test.cpp
+ * @brief CpuEngine correctness on known patterns under the VARIANT rule
+ *        (born on exactly 3 OR exactly 6; survive on 2 or 3).
+ *
+ * CpuEngine is the reference oracle every later backend is checked against, so
+ * it is verified first. PATTERNS_DIR is injected by CMake.
+ */
 
 #include <string>
 
