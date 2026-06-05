@@ -32,7 +32,8 @@ enum class EngineKind {
  */
 enum class RendererKind {
   Null, ///< NullRenderer: no output (use for benchmarking).
-  Text  ///< TextRenderer: ASCII dump to stdout.
+  Text, ///< TextRenderer: ASCII dump to stdout (one appended frame per step).
+  Ansi  ///< AnsiRenderer: in-place ANSI animation (clips to the terminal viewport).
 };
 
 /**

@@ -33,7 +33,8 @@ namespace {
       "      --seed N         RNG seed for random fill (default 1)\n"
       "      --rle PATH       seed from an RLE pattern instead of random\n"
       "      --engine NAME    cpu | cuda | opencl    (default cpu)\n"
-      "      --renderer NAME  null | text            (default null)\n"
+      "      --renderer NAME  null | text | ansi     (default null)\n"
+      "                       text = scrolling ASCII dump; ansi = in-place animation\n"
       "      --block N        GPU threads per block  (default 256)\n"
       "      --shared         GPU shared-memory tiling\n"
       "  -h, --help           show this help\n";
@@ -103,6 +104,7 @@ Config parse(int argc, char** argv) {
       const std::string v = nextValue(argc, argv, i, "--renderer");
       if (v == "null") cfg.renderer = RendererKind::Null;
       else if (v == "text") cfg.renderer = RendererKind::Text;
+      else if (v == "ansi") cfg.renderer = RendererKind::Ansi;
       else { std::cerr << "error: unknown renderer '" << v << "'\n"; usageAndExit(2); }
     } else if (arg == "--block") {
       cfg.blockSize = static_cast<int>(toULL(nextValue(argc, argv, i, "--block"), "--block"));

@@ -24,7 +24,10 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   (`threads == 1`, no synchronisation) and the **data-parallel** mode (`threads >= 2`, a persistent worker
   pool synchronised with `std::barrier`; `threads == 0` = all hardware cores). Both only partition the
   rows, so they produce bit-for-bit identical boards.
-- **Renderers** — `NullRenderer` (header-only, for benchmarking) and `TextRenderer` (ASCII dump).
+- **Renderers** — `NullRenderer` (header-only, for benchmarking), `TextRenderer` (scrolling text
+  dump), and `AnsiRenderer` (in-place ANSI animation; clips big grids to the terminal viewport). Both
+  visible renderers draw live cells as a Unicode full block `█` (U+2588) by default and dead as `.`;
+  the glyph fields are `std::string` (configurable, multi-byte UTF-8).
 - **App** — `main.cpp` owns the loop, wires a CPU engine + renderer, seeds from RLE or a deterministic
   random fill, and prints kernel/wall cells-per-second.
 
@@ -67,7 +70,7 @@ application owns the loop and wires a chosen engine + renderer at runtime:
 ```
 Application (main loop, Config/CLI)
   |-- ISimEngine   <- CpuEngine | CudaEngine | OpenCLEngine
-  |-- IRenderer    <- NullRenderer | TextRenderer | (GuiRenderer later)
+  |-- IRenderer    <- NullRenderer | TextRenderer | AnsiRenderer | (GuiRenderer later)
   '-- Grid + Patterns (shared, backend-agnostic)
 ```
 
@@ -81,7 +84,9 @@ Interfaces:
   `name() const`, virtual dtor. CUDA/OpenCL engines own their device buffers and do the double-buffer
   ping-pong internally (read A -> write B -> swap).
 - `IRenderer`: `render(const Grid&, uint64_t gen)`, `shouldClose() const = false`. `NullRenderer` does
-  nothing — **always benchmark against it** so render/print cost never pollutes cells/sec.
+  nothing — **always benchmark against it** so render/print cost never pollutes cells/sec. `TextRenderer`
+  appends each frame (scrolls); `AnsiRenderer` redraws in place via ANSI escapes and clips to the
+  terminal viewport (it never wraps, since a wrapped row would desync its cursor-home math).
 
 Grid: a flat, row-major `std::vector<unsigned char>` indexed `r * cols_ + c`. It exposes dims, an
 `at(x,y)` accessor, and the raw pointer; engines hold their own ping-pong buffers. Keep this layout
@@ -104,11 +109,11 @@ Layout (parenthesised paths are planned, not yet present):
 
 ```
 include/gol/   Grid.hpp ISimEngine.hpp IRenderer.hpp Config.hpp LifeRules.hpp Timer.hpp
-               engines/CpuEngine.hpp  render/NullRenderer.hpp render/TextRenderer.hpp
+               engines/CpuEngine.hpp  render/NullRenderer.hpp render/TextRenderer.hpp render/AnsiRenderer.hpp
                patterns/Pattern.hpp patterns/RleLoader.hpp
 src/core/      Config.cpp main.cpp                         (Grid/LifeRules/Timer are header-only)
 src/engines/   cpu/CpuEngine.cpp  (cuda/CudaEngine.cu cuda/kernel.cu  opencl/OpenCLEngine.cpp opencl/kernel.cl)
-src/render/    TextRenderer.cpp                            (NullRenderer is header-only)
+src/render/    TextRenderer.cpp AnsiRenderer.cpp           (NullRenderer is header-only)
 src/patterns/  Pattern.cpp RleLoader.cpp
 tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp
 patterns/      *.rle                                       (block, blinker, birth_on_six, highlife_replicator, highlife_spaceship)

@@ -34,7 +34,10 @@ target_link_libraries(gol_cpu PUBLIC gol_core Threads::Threads)
 # ----------------------------------------------------------------------------
 # Renderers (NullRenderer is header-only; TextRenderer has a body).
 # ----------------------------------------------------------------------------
-add_library(gol_render src/render/TextRenderer.cpp)
+add_library(gol_render
+    src/render/TextRenderer.cpp
+    src/render/AnsiRenderer.cpp
+)
 target_link_libraries(gol_render PUBLIC gol_core)
 
 # ----------------------------------------------------------------------------

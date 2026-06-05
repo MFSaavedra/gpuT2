@@ -16,6 +16,7 @@
 #include "gol/engines/CpuEngine.hpp"
 #include "gol/patterns/Pattern.hpp"
 #include "gol/patterns/RleLoader.hpp"
+#include "gol/render/AnsiRenderer.hpp"
 #include "gol/render/NullRenderer.hpp"
 #include "gol/render/TextRenderer.hpp"
 
@@ -31,6 +32,7 @@ namespace {
 std::unique_ptr<IRenderer> makeRenderer(RendererKind kind) {
   switch (kind) {
     case RendererKind::Text: return std::make_unique<TextRenderer>();
+    case RendererKind::Ansi: return std::make_unique<AnsiRenderer>();
     case RendererKind::Null:
     default: return std::make_unique<NullRenderer>();
   }

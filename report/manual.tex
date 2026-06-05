@@ -201,7 +201,8 @@ and impose no link dependency.
 		\texttt{include/gol/Config.hpp}          & Run configuration struct (HO) & \ref{sec:config} \\
 		\texttt{include/gol/engines/CpuEngine.hpp} & CPU engine declaration & \ref{sec:cpu} \\
 		\texttt{include/gol/render/NullRenderer.hpp} & No-op renderer (HO) & \ref{sec:render} \\
-		\texttt{include/gol/render/TextRenderer.hpp} & ASCII renderer declaration & \ref{sec:render} \\
+		\texttt{include/gol/render/TextRenderer.hpp} & Text renderer declaration & \ref{sec:render} \\
+		\texttt{include/gol/render/AnsiRenderer.hpp} & In-place ANSI renderer decl. & \ref{sec:render} \\
 		\texttt{include/gol/patterns/Pattern.hpp} & Sparse seed pattern (HO) & \ref{sec:patterns} \\
 		\texttt{include/gol/patterns/RleLoader.hpp} & RLE loader declaration & \ref{sec:patterns} \\
 		\texttt{src/core/Config.cpp}             & CLI parsing & \ref{sec:configcpp} \\
@@ -210,6 +211,7 @@ and impose no link dependency.
 		\texttt{src/patterns/RleLoader.cpp}      & RLE decoding & \ref{sec:patterns} \\
 		\texttt{src/patterns/Pattern.cpp}        & Stamping a pattern onto a grid & \ref{sec:patterns} \\
 		\texttt{src/render/TextRenderer.cpp}     & ASCII frame dump & \ref{sec:render} \\
+		\texttt{src/render/AnsiRenderer.cpp}     & In-place ANSI animation & \ref{sec:render} \\
 		\texttt{CMakeLists.txt}                  & Build, GPU opt-in gating & \ref{sec:cmake} \\
 		\texttt{tests/*.cpp}                     & Executable spec of the invariants & \ref{sec:tests} \\
 		\bottomrule
@@ -405,7 +407,7 @@ renderer would override it to break the loop early. The key implementation is
 
 \begin{sourcecode}{cpp}{include/gol/Config.hpp --- the knobs (abridged).}
 enum class EngineKind { Cpu, Cuda, OpenCL };
-enum class RendererKind { Null, Text };
+enum class RendererKind { Null, Text, Ansi };
 
 struct Config {
   std::size_t rows = 256, cols = 256;
@@ -515,6 +517,7 @@ from Section \ref{sec:problem} --- keeping I/O out of the number --- is enforced
 std::unique_ptr<IRenderer> makeRenderer(RendererKind kind) {
   switch (kind) {
     case RendererKind::Text: return std::make_unique<TextRenderer>();
+    case RendererKind::Ansi: return std::make_unique<AnsiRenderer>();
     case RendererKind::Null:
     default: return std::make_unique<NullRenderer>();   // safe default = benchmark-safe
   }
@@ -945,21 +948,24 @@ silently dropped, which is the right behaviour for a centering seeder: a pattern
 slightly larger than the grid still produces a valid, cropped board rather than a
 crash.
 
-\section{Rendering --- \texttt{NullRenderer} and \texttt{TextRenderer}}
+\section{Rendering --- \texttt{NullRenderer}, \texttt{TextRenderer}, \texttt{AnsiRenderer}}
 \label{sec:render}
 
+There are three renderers behind \texttt{IRenderer}, none of which is in the
+benchmark path (the loop only renders when the renderer is not Null).
 \texttt{NullRenderer::render} is an empty inline body --- header-only because
 there is nothing to define. Its entire purpose is to \emph{not} exist in the
 timed path (Section \ref{sec:main}).
 
 \begin{sourcecode}{cpp}{src/render/TextRenderer.cpp --- one buffer, one write.}
 void TextRenderer::render(const Grid& grid, std::uint64_t generation) {
+  const std::size_t glyph = std::max(alive_.size(), dead_.size()); // bytes per cell
   std::string out;
-  out.reserve(grid.size() + grid.rows() + 32);   // cells + one '\n' per row + header
+  out.reserve(grid.size() * glyph + grid.rows() + 32);
   out += "generation "; out += std::to_string(generation); out += '\n';
   for (std::size_t y = 0; y < grid.rows(); ++y) {
     for (std::size_t x = 0; x < grid.cols(); ++x)
-      out += grid.at(x, y) ? alive_ : dead_;
+      out += (grid.at(x, y) ? alive_ : dead_);   // alive_/dead_ are std::string
     out += '\n';
   }
   out += '\n';
@@ -972,8 +978,71 @@ The mechanism worth noting is that it builds the entire frame into one
 with a single \texttt{fputs}. Per-cell \texttt{putchar} would lock and flush the
 stream thousands of times per frame. \texttt{at(x, y)} keeps the
 \texttt{(column, row)} argument order matching \texttt{Grid}'s convention even
-though storage is row-major. This renderer is for eyeballing correctness only ---
-never in a benchmark.
+though storage is row-major. The live-cell glyph defaults to the Unicode full
+block (U+2588) and the glyph fields are \texttt{std::string} rather than
+\texttt{char} so the multi-byte UTF-8 block fits; it is one display column wide,
+so the grid stays aligned with the one-column \texttt{.} dead cell. This renderer
+is for eyeballing correctness only --- never in a benchmark.
+
+\subsection{\texttt{AnsiRenderer} --- in-place animation, clipped to the viewport}
+\label{sec:ansi}
+
+\texttt{TextRenderer} \emph{appends} each frame, so the terminal scrolls and any
+row wider than the terminal soft-wraps; it is a dump, not an animation.
+\texttt{AnsiRenderer} instead homes the cursor and overwrites the same region
+every frame using ANSI/DEC control sequences, producing a stable in-place
+animation. It is a small-grid visualisation aid; benchmarks still use
+\texttt{NullRenderer}.
+
+\begin{sourcecode}{cpp}{src/render/AnsiRenderer.cpp --- the per-frame sequence (condensed).}
+// Construction: hide cursor, disable autowrap (wide rows clip, not wrap), clear.
+//   "\033[?25l"  "\033[?7l"  "\033[2J"
+// Destruction (RAII): restore "\033[?7h" (wrap on) "\033[?25h" (cursor on).
+void AnsiRenderer::render(const Grid& grid, std::uint64_t generation) {
+  unsigned termRows = 24, termCols = 80;
+  terminalSize(termRows, termCols);                      // ioctl(TIOCGWINSZ), 80x24 fallback
+  const std::size_t visRows = std::min(grid.rows(), termRows > 1 ? termRows - 1u : 1u);
+  const std::size_t visCols = std::min(grid.cols(), termCols);   // clip to the viewport
+  std::string out;
+  out += "\033[?2026h";                                  // begin synchronized (atomic) update
+  out += "\033[H";                                       // cursor home (overwrite, no flicker)
+  out += "generation " + std::to_string(generation);
+  if (visRows < grid.rows() || visCols < grid.cols())    // note the clip window
+    out += " [" + std::to_string(visCols) + "x" + std::to_string(visRows) +
+           " of " + std::to_string(grid.cols()) + "x" + std::to_string(grid.rows()) + "]";
+  out += "\033[K\n";
+  for (std::size_t y = 0; y < visRows; ++y) {
+    for (std::size_t x = 0; x < visCols; ++x) out += (grid.at(x, y) ? alive_ : dead_);
+    out += "\033[K\n";                                   // clear to EOL (wipe leftovers)
+  }
+  out += "\033[J";                                       // clear below (handles a shrunk terminal)
+  out += "\033[?2026l";
+  std::fputs(out.c_str(), stdout); std::fflush(stdout);
+  if (delayMs_ > 0) std::this_thread::sleep_for(std::chrono::milliseconds(delayMs_));
+}
+\end{sourcecode}
+
+\paragraph{Big grids: it clips, it does not wrap.} This is the key behavioural
+difference. \texttt{TextRenderer} relies on the terminal: a $300\times300$ board
+in an $80$-column terminal wraps every row and scrolls --- unreadable but
+harmless. \texttt{AnsiRenderer} cannot allow wrapping, because a wrapped row
+would occupy several terminal rows and desynchronise the cursor-home arithmetic
+that the whole in-place scheme depends on. So it disables autowrap
+(\texttt{\textbackslash 033[?7l}) and renders only the top-left
+$\min(\text{rows},\,\text{term}-1)\times\min(\text{cols},\,\text{term})$ window,
+annotating the header, e.g. \texttt{generation 0 [80x23 of 300x300]}. The size is
+re-queried every frame, so resizing the terminal is handled.
+
+\paragraph{Robustness details.} A per-frame \texttt{\textbackslash 033[?2026h/l}
+pair asks the terminal for a \emph{synchronized} (tear-free) update and is
+silently ignored where unsupported; \texttt{\textbackslash 033[K} wipes any
+leftover from a previously wider frame and \texttt{\textbackslash 033[J} wipes
+rows orphaned by a shrunk terminal; the cursor is hidden during animation and
+restored (with autowrap) by the destructor even on an early break or exception.
+A small \texttt{delayMs} (default $50$\,ms) paces the otherwise-uncapped loop so
+the animation is watchable; it lives only in this renderer, never in the timed
+path. The size query is POSIX (\texttt{ioctl(TIOCGWINSZ)}); off a TTY it falls
+back to $80\times24$.
 
 \section{Build system --- \texttt{CMakeLists.txt}}
 \label{sec:cmake}

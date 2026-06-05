@@ -1,19 +1,22 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include "gol/IRenderer.hpp"
 
 /**
  * @file TextRenderer.hpp
- * @brief ASCII renderer that dumps the board to stdout, one frame per generation.
+ * @brief Text renderer that dumps the board to stdout, one frame per generation.
  */
 
 namespace gol {
 
 /**
- * @brief Dumps the board to stdout as ASCII, one frame per generation.
+ * @brief Dumps the board to stdout, one frame per generation.
  *
+ * Each frame is appended (the terminal scrolls). The live-cell glyph defaults to
+ * a Unicode full block (U+2588); glyphs are strings so multi-byte UTF-8 works.
  * For small demos and eyeballing correctness only -- never use it in a benchmark
  * (use NullRenderer).
  */
@@ -21,10 +24,10 @@ class TextRenderer final : public IRenderer {
 public:
   /**
    * @brief Construct with the glyphs used for live and dead cells.
-   * @param alive Character printed for a live cell.
-   * @param dead  Character printed for a dead cell.
+   * @param alive Glyph for a live cell (default: U+2588 full block "█").
+   * @param dead  Glyph for a dead cell (default: ".").
    */
-  explicit TextRenderer(char alive = '#', char dead = '.');
+  explicit TextRenderer(std::string alive = "█", std::string dead = ".");
 
   /**
    * @brief Print one frame (a generation header line followed by the board).
@@ -34,8 +37,8 @@ public:
   void render(const Grid& grid, std::uint64_t generation) override;
 
 private:
-  char alive_; ///< Glyph for a live cell.
-  char dead_;  ///< Glyph for a dead cell.
+  std::string alive_; ///< Glyph for a live cell.
+  std::string dead_;  ///< Glyph for a dead cell.
 };
 
 } // namespace gol
