@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -26,13 +27,19 @@ namespace gol {
  * The viewport clip below divides the terminal width by the per-cell display
  * width accordingly. Glyphs are strings so multi-byte UTF-8 works.
  *
- * Big grids: the board is CLIPPED to the visible terminal viewport (the top-left
- * region that fits), never wrapped -- a grid wider/taller than the terminal
- * shows a window with a "[cols x rows of W x H]" note in the header. For honest
- * benchmarks use NullRenderer; this is a small-grid visualisation aid.
+ * Big grids: the board is CLIPPED to the visible terminal viewport, never wrapped
+ * -- a grid larger than the terminal shows a window with a "view(ox,oy) ... of
+ * W x H" note in the header. For honest benchmarks use NullRenderer; this is a
+ * small-grid visualisation aid.
  *
- * Intended for an interactive TTY; if stdout is not a terminal the size query
- * falls back to 80x24 and the escape codes are still emitted.
+ * Interactive controls: when stdin is a TTY the renderer puts the terminal in
+ * raw mode (non-blocking) and reads keys each frame -- the arrow keys pan the
+ * viewport over a grid larger than the screen, `space`/`p` toggles pause (the
+ * simulation halts but you can still pan), and `q` requests termination via
+ * shouldClose(). Pause is contained entirely here (render() loops while paused),
+ * so the main loop and engine are untouched. The terminal is restored on
+ * destruction and on SIGINT/SIGTERM. When stdin is not a TTY (piped), the
+ * controls are disabled and the top-left window is shown.
  */
 class AnsiRenderer final : public IRenderer {
 public:
@@ -63,10 +70,18 @@ public:
    */
   void render(const Grid& grid, std::uint64_t generation) override;
 
+  /// @return true once the user has pressed `q` (interactive mode only).
+  bool shouldClose() const override { return quit_; }
+
 private:
-  std::string alive_; ///< Glyph for a live cell.
-  std::string dead_;  ///< Glyph for a dead cell.
-  unsigned delayMs_;  ///< Per-frame pause in milliseconds.
+  std::string alive_;       ///< Glyph for a live cell.
+  std::string dead_;        ///< Glyph for a dead cell.
+  unsigned delayMs_;        ///< Per-frame pause in milliseconds.
+  std::size_t offsetX_ = 0; ///< Viewport top-left column in grid coordinates.
+  std::size_t offsetY_ = 0; ///< Viewport top-left row in grid coordinates.
+  bool interactive_ = false;///< stdin is a TTY -> raw mode + arrow-key panning.
+  bool quit_ = false;       ///< User pressed `q` (drives shouldClose()).
+  bool paused_ = false;     ///< Pause toggle (space/p): sim halts, panning still works.
 };
 
 } // namespace gol

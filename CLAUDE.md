@@ -29,6 +29,11 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   visible renderers draw each live cell as **two** full blocks `██` (U+2588) and dead as two spaces, so
   cells read as squares despite the ~1:2 terminal cell aspect ratio; glyph fields are `std::string`
   (configurable). `AnsiRenderer` clips by per-cell display width (2 cols/cell), not raw column count.
+  On a TTY it is **interactive**: arrow keys pan the viewport over a grid larger than the screen,
+  `space`/`p` pauses (the sim halts but you can still pan), and `q` quits (via `shouldClose()`). It
+  uses raw, non-blocking input and restores the terminal on exit and on SIGINT/SIGTERM. Pause is
+  contained in `render()` (a `do/while`), so the main loop/engine/interface are untouched; piped
+  (non-TTY), the controls are disabled and the top-left window is shown.
 - **App** — `main.cpp` owns the loop, wires a CPU engine + renderer, seeds from RLE or a deterministic
   random fill, and prints kernel/wall cells-per-second.
 

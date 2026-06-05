@@ -1124,10 +1124,30 @@ that the whole in-place scheme depends on. So it disables autowrap
 (\texttt{\textbackslash 033[?7l}) and renders only the top-left
 $\min(\text{rows},\,\text{term}-1)\times\min(\text{cols},\,\text{term}/\text{cell})$
 window, where \emph{cell} is the per-cell display width ($2$ for the default
-two-block glyph); it annotates the header, e.g. \texttt{generation 0 [40x23 of
-300x300]} ($300$ columns in an $80$-column terminal leaves room for $40$
+two-block glyph); it annotates the header, e.g. \texttt{generation 0 view(0,0)
+40x23 of 300x300} ($300$ columns in an $80$-column terminal leaves room for $40$
 two-column cells). The size is re-queried every frame, so resizing the terminal
 is handled.
+
+\paragraph{Interactive controls.} Because the window is smaller than the grid,
+the renderer lets you drive it. When stdin is a TTY it puts the terminal in raw,
+non-blocking mode (clearing \texttt{ICANON}/\texttt{ECHO}, \texttt{VMIN=VTIME=0})
+and drains queued key presses each frame: the arrow keys shift the
+\texttt{(offsetX\_, offsetY\_)} top-left of the viewport (by $\approx$ one eighth
+of the view per press, clamped to the grid), \texttt{space}/\texttt{p} toggles
+pause, and \texttt{q} sets the flag returned by \texttt{shouldClose()} so the main
+loop stops. Reads are non-blocking, so input never stalls the simulation.
+
+\emph{Pause is contained entirely in the renderer}: while paused,
+\texttt{render()} loops on a \texttt{do/while} --- still polling input and
+redrawing the \emph{same} generation (the header shows \texttt{[PAUSED]}) --- and
+returns only once unpaused or quitting, so the application never calls
+\texttt{step()} meanwhile. The main loop, the engine, and the \texttt{IRenderer}
+interface are untouched, and the benchmark path (NullRenderer) never pauses. The
+terminal is restored on destruction \emph{and} from a
+\texttt{SIGINT}/\texttt{SIGTERM} handler (so Ctrl-C cannot leave it in raw mode);
+when stdin is not a TTY, the controls are disabled and the top-left window is
+shown.
 
 \paragraph{Robustness details.} A per-frame \texttt{\textbackslash 033[?2026h/l}
 pair asks the terminal for a \emph{synchronized} (tear-free) update and is
