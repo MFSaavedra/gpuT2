@@ -181,6 +181,22 @@ gol_core  (Grid, Config+CLI, patterns, RLE, interfaces)
 gol  executable  =  gol_core + gol_cpu + gol_render
 \end{sourcecode}
 
+The UML class diagram in Figure \ref{fig:uml} renders these relationships
+formally. The \texttt{Application} depends only on the two strategy interfaces;
+every backend and renderer is a realization behind them, and the shared
+\texttt{Grid} flows through all of them unchanged.
+
+\insertimage{uml_architecture}{width=\linewidth}{UML class diagram of the
+project (generated from \texttt{report/diagrams/architecture.mmd} with
+mermaid-cli). The \texttt{Application} owns one \texttt{ISimEngine} and one
+\texttt{IRenderer} --- the two strategy interfaces. \texttt{CpuEngine} realizes
+\texttt{ISimEngine} today; \texttt{CudaEngine} and \texttt{OpenCLEngine} are
+marked \emph{planned}. \texttt{NullRenderer}, \texttt{TextRenderer} and
+\texttt{AnsiRenderer} realize \texttt{IRenderer}. Dashed arrows are dependencies
+(e.g. \texttt{CpuEngine} uses \texttt{LifeRules::nextState} and \texttt{Timer};
+\texttt{RleLoader} produces a \texttt{Pattern} that stamps a \texttt{Grid}).
+\label{fig:uml}}
+
 Table \ref{tab:files} is the file map. Header-only units carry no \texttt{.cpp}
 and impose no link dependency.
 

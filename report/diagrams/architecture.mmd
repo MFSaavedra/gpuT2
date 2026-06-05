@@ -1,0 +1,128 @@
+%% Game of Life (CPU / CUDA / OpenCL) -- architecture & strategy pattern.
+%% Source of truth for the UML; render with mermaid-cli (mmdc).
+%% NOTE: -c mermaid-config.json sets htmlLabels:false so the SVG uses native
+%% <text> (not <foreignObject>); without it rsvg-convert produces a text-less PDF.
+%%   mmdc -i report/diagrams/architecture.mmd -o report/img/uml_architecture.svg \
+%%        -p report/diagrams/puppeteer.json -c report/diagrams/mermaid-config.json -b white -t neutral
+%%   rsvg-convert -f pdf -o report/img/uml_architecture.pdf report/img/uml_architecture.svg
+%%   mmdc -i report/diagrams/architecture.mmd -o report/img/uml_architecture.png \
+%%        -p report/diagrams/puppeteer.json -c report/diagrams/mermaid-config.json -b white -t neutral -s 3
+classDiagram
+  direction TB
+
+  class Application {
+    +main(argc, argv) int
+    -seed(Grid, Config)
+    -makeRenderer(RendererKind) IRenderer
+  }
+
+  class ISimEngine {
+    <<interface>>
+    +upload(Grid) void
+    +step() void
+    +download(Grid) void
+    +lastKernelMillis() double
+    +name() string
+  }
+  class IRenderer {
+    <<interface>>
+    +render(Grid, gen) void
+    +shouldClose() bool
+  }
+
+  class CpuEngine {
+    -threads_ unsigned
+    -wrap_ bool
+    -cur_ vector~uchar~
+    -nxt_ vector~uchar~
+    -barrier_ barrier
+    +step()
+  }
+  class CudaEngine {
+    <<planned>>
+  }
+  class OpenCLEngine {
+    <<planned>>
+  }
+
+  class NullRenderer {
+    +render(Grid, gen)
+  }
+  class TextRenderer {
+    -alive_ string
+    -dead_ string
+    +render(Grid, gen)
+  }
+  class AnsiRenderer {
+    -alive_ string
+    -dead_ string
+    -delayMs_ unsigned
+    +render(Grid, gen)
+  }
+
+  class Grid {
+    -rows_ size_t
+    -cols_ size_t
+    -cells_ vector~uchar~
+    +at(x, y) uchar
+    +data() bytes
+    +randomize(seed)
+    +operator_eq(Grid) bool
+  }
+  class Config {
+    +rows size_t
+    +cols size_t
+    +generations uint64
+    +engine EngineKind
+    +renderer RendererKind
+    +threads unsigned
+    +wrap bool
+  }
+  class Pattern {
+    +width size_t
+    +height size_t
+    +liveCells vector~xy~
+    +applyTo(Grid, ox, oy)
+  }
+  class RleLoader {
+    +load(path) Pattern
+  }
+  class LifeRules {
+    <<header>>
+    +nextState(alive, n) uchar
+  }
+  class Timer {
+    +elapsedMillis() double
+  }
+  class EngineKind {
+    <<enumeration>>
+    Cpu
+    Cuda
+    OpenCL
+  }
+  class RendererKind {
+    <<enumeration>>
+    Null
+    Text
+    Ansi
+  }
+
+  ISimEngine <|.. CpuEngine
+  ISimEngine <|.. CudaEngine
+  ISimEngine <|.. OpenCLEngine
+  IRenderer <|.. NullRenderer
+  IRenderer <|.. TextRenderer
+  IRenderer <|.. AnsiRenderer
+
+  Application --> ISimEngine : owns (strategy)
+  Application --> IRenderer : owns (strategy)
+  Application --> Grid : seeds & drives
+  Application --> Config : parses
+
+  CpuEngine ..> Grid
+  CpuEngine ..> LifeRules : nextState()
+  CpuEngine ..> Timer : kernel timing
+  RleLoader ..> Pattern : produces
+  Pattern ..> Grid : applyTo()
+  Config --> EngineKind
+  Config --> RendererKind

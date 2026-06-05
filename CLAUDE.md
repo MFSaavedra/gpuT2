@@ -185,6 +185,20 @@ There are **two** standalone documents, both built the same way:
 cd report && latexmk -pdf main.tex      # or: latexmk -pdf manual.tex
 ```
 
+**Architecture UML.** The class diagram source is `report/diagrams/architecture.mmd` (Mermaid),
+rendered with mermaid-cli to `report/img/uml_architecture.{svg,pdf,png}` — the PDF is embedded in the
+manual (Figure 1) and the PNG is for the assignment report. Regenerate after architecture changes:
+
+```bash
+# -c mermaid-config.json sets htmlLabels:false -> native SVG <text> (not <foreignObject>),
+# so rsvg-convert renders text into the PDF; -p sets Chromium's --no-sandbox for this env.
+mmdc -i report/diagrams/architecture.mmd -o report/img/uml_architecture.svg \
+     -p report/diagrams/puppeteer.json -c report/diagrams/mermaid-config.json -b white -t neutral
+rsvg-convert -f pdf -o report/img/uml_architecture.pdf report/img/uml_architecture.svg
+mmdc -i report/diagrams/architecture.mmd -o report/img/uml_architecture.png \
+     -p report/diagrams/puppeteer.json -c report/diagrams/mermaid-config.json -b white -t neutral -s 3
+```
+
 The assignment statement is `Tarea_2_Enunciado.pdf` (in Spanish) — the source of truth for requirements.
 
 ## Documentation maintenance
@@ -198,7 +212,10 @@ update all three affected documents in the same change** — do not defer it. Sp
 - **`report/manual.tex`** — update the relevant section and the file map (Table `tab:files`). New
   source files get a section + a row; changed mechanisms get their walkthrough/snippet updated;
   removed files get their entry deleted. Keep code snippets matching the real code (em-dashes inside
-  `sourcecode` listings must be `--`; escape `_`, `$`, `#`, `%`, `&` in *captions* and prose).
+  `sourcecode` listings must be `--`; escape `_`, `$`, `#`, `%`, `&` in *captions* and prose; a raw
+  `█`/Unicode glyph in LaTeX text breaks pdflatex — describe it as "U+2588" instead). If the class or
+  relationship structure changes, update the UML source `report/diagrams/architecture.mmd` and
+  re-render `report/img/uml_architecture.*` (commands under "Report").
 - **`report/main.tex`** — update only when results, experiments, or methodology move (e.g. a GPU
   backend lands, a benchmark is run, a config variation changes). It is the graded report.
 - **`CLAUDE.md`** — update "Current state", the layout tree, and any affected section (Build, Tests,
