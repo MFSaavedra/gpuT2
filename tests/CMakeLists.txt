@@ -57,3 +57,17 @@ target_compile_definitions(gol_engine_tests
 )
 
 gtest_discover_tests(gol_engine_tests)
+
+# Cross-backend equivalence: CudaEngine vs the CpuEngine oracle. Only built when
+# the CUDA engine was configured (-DBUILD_CUDA=ON). Requires a GPU at run time.
+if(GOL_CUDA_ENABLED)
+    add_executable(gol_cuda_tests cuda_equivalence_test.cpp)
+    target_link_libraries(gol_cuda_tests
+        PRIVATE
+            gol_core
+            gol_cpu
+            gol_cuda
+            GTest::gtest_main
+    )
+    gtest_discover_tests(gol_cuda_tests)
+endif()

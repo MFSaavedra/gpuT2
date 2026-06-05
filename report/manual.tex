@@ -189,13 +189,13 @@ every backend and renderer is a realization behind them, and the shared
 \insertimage{uml_architecture}{width=\linewidth}{UML class diagram of the
 project (generated from \texttt{report/diagrams/architecture.mmd} with
 mermaid-cli). The \texttt{Application} owns one \texttt{ISimEngine} and one
-\texttt{IRenderer} --- the two strategy interfaces. \texttt{CpuEngine} realizes
-\texttt{ISimEngine} today; \texttt{CudaEngine} and \texttt{OpenCLEngine} are
-marked \emph{planned}. \texttt{NullRenderer}, \texttt{TextRenderer} and
+\texttt{IRenderer} --- the two strategy interfaces. \texttt{CpuEngine} and
+\texttt{CudaEngine} realize \texttt{ISimEngine}; \texttt{OpenCLEngine} is marked
+\emph{planned}. \texttt{NullRenderer}, \texttt{TextRenderer} and
 \texttt{AnsiRenderer} realize \texttt{IRenderer}. Dashed arrows are dependencies
-(e.g. \texttt{CpuEngine} uses \texttt{LifeRules::nextState} and \texttt{Timer};
-\texttt{RleLoader} produces a \texttt{Pattern} that stamps a \texttt{Grid}).
-\label{fig:uml}}
+(e.g. \texttt{CpuEngine} and \texttt{CudaEngine} both use
+\texttt{LifeRules::nextState}; \texttt{RleLoader} produces a \texttt{Pattern}
+that stamps a \texttt{Grid}). \label{fig:uml}}
 
 Table \ref{tab:files} is the file map. Header-only units carry no \texttt{.cpp}
 and impose no link dependency.
@@ -216,6 +216,8 @@ and impose no link dependency.
 		\texttt{include/gol/IRenderer.hpp}       & Renderer strategy interface (HO) & \ref{sec:interfaces} \\
 		\texttt{include/gol/Config.hpp}          & Run configuration struct (HO) & \ref{sec:config} \\
 		\texttt{include/gol/engines/CpuEngine.hpp} & CPU engine declaration & \ref{sec:cpu} \\
+		\texttt{include/gol/engines/CudaEngine.hpp} & CUDA engine declaration & \ref{sec:cuda} \\
+		\texttt{include/gol/engines/cuda/kernel.cuh} & CUDA launcher declaration & \ref{sec:cuda} \\
 		\texttt{include/gol/render/NullRenderer.hpp} & No-op renderer (HO) & \ref{sec:render} \\
 		\texttt{include/gol/render/TextRenderer.hpp} & Text renderer declaration & \ref{sec:render} \\
 		\texttt{include/gol/render/AnsiRenderer.hpp} & In-place ANSI renderer decl. & \ref{sec:render} \\
@@ -224,6 +226,8 @@ and impose no link dependency.
 		\texttt{src/core/Config.cpp}             & CLI parsing & \ref{sec:configcpp} \\
 		\texttt{src/core/main.cpp}               & The loop and the metric & \ref{sec:main} \\
 		\texttt{src/engines/cpu/CpuEngine.cpp}   & CPU engine (seq + parallel) & \ref{sec:cpu} \\
+		\texttt{src/engines/cuda/CudaEngine.cu}  & CUDA engine implementation & \ref{sec:cuda} \\
+		\texttt{src/engines/cuda/kernel.cu}      & CUDA step kernels & \ref{sec:cuda} \\
 		\texttt{src/patterns/RleLoader.cpp}      & RLE decoding & \ref{sec:patterns} \\
 		\texttt{src/patterns/Pattern.cpp}        & Stamping a pattern onto a grid & \ref{sec:patterns} \\
 		\texttt{src/render/TextRenderer.cpp}     & ASCII frame dump & \ref{sec:render} \\
@@ -883,6 +887,76 @@ arrive'' and workers could read stale pointers. Give \texttt{nextState} any
 per-cell state and the sequential/parallel equivalence collapses --- it is
 stateless on purpose.
 
+\section{The CUDA engine --- \texttt{CudaEngine.cu} and \texttt{kernel.cu}}
+\label{sec:cuda}
+
+The GPU backend is the first that crosses the host/device boundary, yet it
+reuses everything the core already fixed: the same flat \texttt{Grid} bytes, the
+same \texttt{nextState} rule (now compiled \texttt{\_\_host\_\_ \_\_device\_\_}
+under nvcc), and the same edge handling. That reuse is exactly why it can be
+checked bit-for-bit against the CPU oracle (Section \ref{sec:tests}).
+
+\subsection{Engine: device buffers, ping-pong, event timing}
+
+\texttt{CudaEngine} owns two device buffers (\texttt{dCur\_}, \texttt{dNxt\_})
+and does the ping-pong on the device; the host \texttt{Grid} is touched only by
+\texttt{upload} (H2D \texttt{cudaMemcpy}) and \texttt{download} (D2H). The header
+is deliberately CUDA-free (handles stored as \texttt{void*} /
+\texttt{unsigned char*} and cast in the \texttt{.cu}), so \texttt{main.cpp}
+compiles with the host compiler and only the \texttt{.cu} files go through nvcc.
+
+\begin{sourcecode}{cpp}{src/engines/cuda/CudaEngine.cu --- one generation, kernel-only timing.}
+void CudaEngine::step() {
+  cudaEventRecord(start);
+  launchLifeStep(dCur_, dNxt_, rows_, cols_, wrap_, blockSize_, useShared_);
+  cudaEventRecord(stop);
+  cudaEventSynchronize(stop);
+  cudaEventElapsedTime(&ms, start, stop);  // kernel time only -- excludes H2D/D2H
+  lastMs_ = ms;
+  std::swap(dCur_, dNxt_);                  // ping-pong on the device
+}
+\end{sourcecode}
+
+Bracketing the launch with \texttt{cudaEvent\_t} makes
+\texttt{lastKernelMillis()} report kernel-only time, excluding the transfers ---
+the GPU analogue of the CPU's chrono timing, and what makes the cells/sec numbers
+comparable across backends (Section \ref{sec:metric}).
+
+\subsection{Kernels: one thread per cell, 32-wide tiles}
+
+\texttt{kernel.cu} holds two device kernels and a host launcher. The launcher
+maps the block size onto a 2-D tile and selects the variant:
+
+\begin{sourcecode}{cpp}{src/engines/cuda/kernel.cu --- launcher (tile mapping + kernel choice).}
+const int bx = 32;                          // 32-wide rows -> coalesced global loads
+const int by = (blockSize + bx - 1) / bx;   // 32/64/128/256 -> by = 1/2/4/8
+dim3 block(bx, by);
+dim3 grid((cols + bx - 1) / bx, (rows + by - 1) / by);
+if (useShared)
+  lifeShared<<<grid, block, (bx + 2) * (by + 2)>>>(src, dst, rows, cols, wrap);
+else
+  lifeGlobal<<<grid, block>>>(src, dst, rows, cols, wrap);
+\end{sourcecode}
+
+The 32-wide tile is the key performance choice: consecutive threads in a warp
+read consecutive 1-byte cells of a row, so global loads coalesce --- the right
+default for a memory-bound stencil. \texttt{lifeGlobal} reads the eight
+neighbours straight from global memory. \texttt{lifeShared} (selected by
+\texttt{--shared}) first stages a \texttt{(bx+2) x (by+2)} tile plus a one-cell
+halo into shared memory cooperatively, applying the \emph{same} edge rule during
+the halo load (bounded $\rightarrow$ 0, toroidal $\rightarrow$ wrap), then reads
+neighbours from the tile. Both produce byte-identical results to the CPU oracle;
+the report's job is to measure whether the staging pays off (Section
+\ref{sec:timing} predicts it largely will not for a 1-byte stencil).
+
+\subsection{The two swept options}
+
+Block size (\texttt{--block}) and shared memory (\texttt{--shared}) are the two
+assignment options chosen (\#1 and \#3); both are runtime-selectable, so one
+binary drives the whole sweep. The CUDA target is opt-in
+(\texttt{-DBUILD\_CUDA=ON}), built for \texttt{sm\_75} (the GTX 1660 Ti) with
+\texttt{-lineinfo} so Nsight Compute can attribute time to source lines.
+
 \section{The pattern pipeline --- \texttt{RleLoader.cpp} and \texttt{Pattern.cpp}}
 \label{sec:patterns}
 
@@ -1224,13 +1298,17 @@ hardware.
 \label{sec:roadmap}
 
 \paragraph{Done.} The backend-agnostic core, the CPU engine (sequential and
-parallel in one path), both renderers, the RLE pipeline, the CLI, and the first
-three test suites. The CPU engine is the reference oracle.
+parallel in one path), both renderers, the RLE pipeline, the CLI, and the
+\texttt{CudaEngine} (global + shared kernels, \texttt{--block}/\texttt{--shared},
+cudaEvent timing). Test suites: CPU rules, sequential-vs-parallel, RLE loader,
+and the CUDA-vs-CPU cross-backend equivalence (Section \ref{sec:cuda}). The CPU
+engine is the reference oracle.
 
-\paragraph{Pending.} \texttt{CudaEngine} (\texttt{src/engines/cuda/}) and
-\texttt{OpenCLEngine} (\texttt{src/engines/opencl/}); the cross-backend
-equivalence test; and the benchmark sweeps, results CSVs, and analysis notebooks
-that populate \texttt{main.tex}.
+\paragraph{Pending.} \texttt{OpenCLEngine} (\texttt{src/engines/opencl/}) and its
+cross-backend test; a CSV benchmark-output mode (\texttt{--csv}) and the sweep
+scripts; and the benchmark runs, results CSVs, and analysis notebooks that
+populate \texttt{main.tex} (including the Nsight deep-dive on the best CUDA
+config).
 
 \paragraph{How a GPU backend slots in.} Implement \texttt{ISimEngine}: own two
 device buffers, \texttt{upload} once, ping-pong on the device inside

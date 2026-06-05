@@ -32,10 +32,19 @@ The engine/renderer **strategy** layout below is in place. What exists and works
 - **App** — `main.cpp` owns the loop, wires a CPU engine + renderer, seeds from RLE or a deterministic
   random fill, and prints kernel/wall cells-per-second.
 
-Still greenfield: CUDA (`CudaEngine`) and OpenCL (`OpenCLEngine`) — no device sources yet, so
-`--engine cuda|opencl` errors. GPU CMake targets are opt-in via `-DBUILD_CUDA=ON` / `-DBUILD_OPENCL=ON`
-and won't configure until their sources exist. `CpuEngine` is the reference oracle every GPU backend
-will be checked against.
+- **CudaEngine** (`ISimEngine`) — implemented. One thread per cell over a 2D grid of blocks; owns two
+  device buffers and ping-pongs on the device. Two runtime-selectable kernels: plain global-memory and
+  a shared-memory tiled variant with a 1-cell halo (`--shared`); block size (`--block`) maps to a
+  32-wide tile for coalesced loads. Kernel timed with `cudaEvent_t` (excludes transfers); reuses
+  `nextState` from `LifeRules.hpp` verbatim. Verified **bit-for-bit against the `CpuEngine` oracle**
+  across block sizes, shared/global, and both edge modes (`cuda_equivalence_test.cpp`). Opt-in via
+  `-DBUILD_CUDA=ON`; targets `sm_75` (GTX 1660 Ti) with `-lineinfo` for `ncu`.
+
+Still greenfield: OpenCL (`OpenCLEngine`) — no device source yet, so `--engine opencl` errors (and is
+omitted from a build without `-DBUILD_OPENCL=ON`). GPU CMake targets are opt-in and double-gated (the
+option **and** the source must exist). `CpuEngine` is the reference oracle every GPU backend is checked
+against. The chosen optimization options to benchmark are **#1 block size** and **#3 shared memory**
+(the `--block` / `--shared` knobs); option #2 (2D vs 1D arrays) is not used — the `Grid` is flat 1-D.
 
 ## Build & test
 
@@ -113,7 +122,8 @@ include/gol/   Grid.hpp ISimEngine.hpp IRenderer.hpp Config.hpp LifeRules.hpp Ti
                engines/CpuEngine.hpp  render/NullRenderer.hpp render/TextRenderer.hpp render/AnsiRenderer.hpp
                patterns/Pattern.hpp patterns/RleLoader.hpp
 src/core/      Config.cpp main.cpp                         (Grid/LifeRules/Timer are header-only)
-src/engines/   cpu/CpuEngine.cpp  (cuda/CudaEngine.cu cuda/kernel.cu  opencl/OpenCLEngine.cpp opencl/kernel.cl)
+src/engines/   cpu/CpuEngine.cpp  cuda/CudaEngine.cu cuda/kernel.cu   (opencl/OpenCLEngine.cpp opencl/kernel.cl)
+include/gol/engines/  CudaEngine.hpp  cuda/kernel.cuh
 src/render/    TextRenderer.cpp AnsiRenderer.cpp           (NullRenderer is header-only)
 src/patterns/  Pattern.cpp RleLoader.cpp
 tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp
@@ -162,8 +172,11 @@ In dependency order (`CpuEngine` is the oracle, so it is verified first):
 3. **RLE loader + `Pattern::applyTo`** — done. Parsing, stamping, clipping, missing-file errors
    (`rle_loader_test.cpp`). `compile_smoke_test.cpp` also includes every header so the scaffolding stays
    build-clean.
-4. **Cross-backend equivalence** — pending the GPU engines. Seed CPU/CUDA/OpenCL identically, run N
-   generations, assert bit-for-bit equality against the `CpuEngine` oracle.
+4. **Cross-backend equivalence** — CUDA done, OpenCL pending. `cuda_equivalence_test.cpp` seeds CUDA
+   and CPU identically and asserts bit-for-bit equality against the `CpuEngine` oracle across block
+   sizes {32,64,128,256}, shared/global kernels, and both edge modes (plus a birth-on-6 device check).
+   Built only when `-DBUILD_CUDA=ON` (`gol_cuda_tests`); needs a GPU at run time. OpenCL will follow the
+   same pattern.
 
 **Golly as an external oracle.** Golly is installed locally, including the headless `bgolly` runner
 (infinite grid, no edge effects). It runs our exact rule (`B36/S23`), so it is a second, independent

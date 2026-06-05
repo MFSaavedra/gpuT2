@@ -59,8 +59,23 @@ if(BUILD_CUDA)
             ${_cuda_src}
             ${CMAKE_CURRENT_SOURCE_DIR}/src/engines/cuda/kernel.cu
         )
-        target_link_libraries(gol_cuda PUBLIC gol_core)
-        set_target_properties(gol_cuda PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+        # gol_cuda only consumes header-only pieces (LifeRules.hpp, Grid.hpp), so it
+        # needs gol_core's include dir but must NOT link gol_core -- that would
+        # propagate the cxx_std_23 requirement onto nvcc, which has no such flag.
+        target_include_directories(gol_cuda PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        set_target_properties(gol_cuda PROPERTIES
+            CUDA_ARCHITECTURES 75              # GTX 1660 Ti (Turing); override as needed
+            CUDA_SEPARABLE_COMPILATION OFF
+            CUDA_STANDARD 17                   # device TUs need only C++17; host/app stays C++23
+            CUDA_STANDARD_REQUIRED ON
+        )
+        target_compile_options(gol_cuda PRIVATE
+            $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>) # source attribution for ncu
+
+        # Wire the CUDA engine into the application.
+        target_link_libraries(gol PRIVATE gol_cuda)
+        target_compile_definitions(gol PRIVATE GOL_HAVE_CUDA)
+        set(GOL_CUDA_ENABLED ON)               # consumed by tests/ (added later)
     else()
         message(WARNING "BUILD_CUDA=ON but ${_cuda_src} does not exist yet; "
                         "skipping the CUDA engine.")

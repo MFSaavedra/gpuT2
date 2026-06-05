@@ -8,12 +8,17 @@
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 
 #include "gol/Config.hpp"
 #include "gol/Grid.hpp"
 #include "gol/IRenderer.hpp"
+#include "gol/ISimEngine.hpp"
 #include "gol/Timer.hpp"
 #include "gol/engines/CpuEngine.hpp"
+#ifdef GOL_HAVE_CUDA
+#include "gol/engines/CudaEngine.hpp"
+#endif
 #include "gol/patterns/Pattern.hpp"
 #include "gol/patterns/RleLoader.hpp"
 #include "gol/render/AnsiRenderer.hpp"
@@ -55,6 +60,37 @@ void seed(Grid& grid, const Config& cfg) {
   }
 }
 
+/**
+ * @brief Factory mapping the configured EngineKind to a concrete ISimEngine.
+ * @param cfg Run configuration.
+ * @return Owning pointer to the engine, or nullptr if that backend is not built.
+ */
+std::unique_ptr<ISimEngine> makeEngine(const Config& cfg) {
+  switch (cfg.engine) {
+    case EngineKind::Cpu:
+      return std::make_unique<CpuEngine>(cfg.threads, cfg.wrap);
+#ifdef GOL_HAVE_CUDA
+    case EngineKind::Cuda:
+      return std::make_unique<CudaEngine>(cfg.blockSize, cfg.wrap, cfg.useShared);
+#endif
+    default:
+      return nullptr; // backend not compiled into this build
+  }
+}
+
+/// @brief Backend-specific config suffix for the report line (threads / block+shared).
+std::string backendConfig(const Config& cfg) {
+  switch (cfg.engine) {
+    case EngineKind::Cpu:
+      return "threads=" + std::to_string(cfg.threads);
+    case EngineKind::Cuda:
+      return "block=" + std::to_string(cfg.blockSize) +
+             (cfg.useShared ? " shared" : " no-shared");
+    default:
+      return "";
+  }
+}
+
 } // namespace
 
 /**
@@ -66,20 +102,20 @@ void seed(Grid& grid, const Config& cfg) {
 int main(int argc, char** argv) {
   const Config cfg = parse(argc, argv);
 
-  if (cfg.engine != EngineKind::Cpu) {
-    std::cerr << "error: only the CPU engine is implemented so far.\n";
-    return 1;
-  }
-
   try {
     Grid grid(cfg.rows, cfg.cols);
     seed(grid, cfg);
 
-    CpuEngine engine(cfg.threads, cfg.wrap);
+    auto engine = makeEngine(cfg);
+    if (!engine) {
+      std::cerr << "error: the requested engine is not available in this build "
+                   "(rebuild with -DBUILD_CUDA=ON or -DBUILD_OPENCL=ON).\n";
+      return 1;
+    }
     auto renderer = makeRenderer(cfg.renderer);
     const bool rendering = cfg.renderer != RendererKind::Null;
 
-    engine.upload(grid);
+    engine->upload(grid);
 
     // Generation 0 is the seed itself: render it before the first step so the
     // displayed frames are seed, step 1, step 2, ... with honest labels. The
@@ -89,10 +125,10 @@ int main(int argc, char** argv) {
     Timer wall;
     double kernelMs = 0.0;
     for (std::uint64_t gen = 0; gen < cfg.generations; ++gen) {
-      engine.step();
-      kernelMs += engine.lastKernelMillis();
+      engine->step();
+      kernelMs += engine->lastKernelMillis();
       if (rendering) {
-        engine.download(grid);
+        engine->download(grid);
         renderer->render(grid, gen + 1); // state after `gen + 1` steps
         if (renderer->shouldClose()) break;
       }
@@ -106,7 +142,7 @@ int main(int argc, char** argv) {
       return ms > 0.0 ? cells / (ms / 1000.0) / 1e6 : 0.0;
     };
 
-    std::cout << "backend:    " << engine.name() << " (threads=" << engine.threads() << ")\n"
+    std::cout << "backend:    " << engine->name() << " (" << backendConfig(cfg) << ")\n"
               << "grid:       " << cfg.rows << "x" << cfg.cols
               << "  generations=" << cfg.generations
               << "  edges=" << (cfg.wrap ? "toroidal" : "bounded") << "\n"
