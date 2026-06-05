@@ -33,7 +33,6 @@ compile_commands.json   # generated; lives under build/ but often symlinked to r
 # LaTeX build artifacts (report/). Image PDFs under report/img/ and the
 # assignment PDF are tracked, so do NOT blanket-ignore *.pdf.
 # ----------------------------------------------------------------------------
-/report/main.pdf
 *.aux
 *.bbl
 *.bcf
@@ -41,6 +40,7 @@ compile_commands.json   # generated; lives under build/ but often symlinked to r
 *.fdb_latexmk
 *.fls
 *.lof
+*.lol
 *.log
 *.lot
 *.out

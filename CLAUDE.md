@@ -168,10 +168,37 @@ reproduce `bgolly` bit-for-bit, so they make good large-grid cross-checks for th
 ## Report
 
 LaTeX sources are in `report/`, built from a vendored template (`report/src/`, `report/template.tex`).
-Edit `report/main.tex` — it has the full section skeleton with the grading rubric noted in comments.
+There are **two** standalone documents, both built the same way:
+
+- `report/main.tex` — the **graded assignment report** (Spanish). Full section skeleton with the
+  grading rubric noted in comments; holds experiments, results, speed-up analysis.
+- `report/manual.tex` — the **developer manual** (English). Architecture, mechanism, and a
+  line-by-line code walkthrough; the reference for how/why the code works.
 
 ```bash
-cd report && latexmk -pdf main.tex
+cd report && latexmk -pdf main.tex      # or: latexmk -pdf manual.tex
 ```
 
 The assignment statement is `Tarea_2_Enunciado.pdf` (in Spanish) — the source of truth for requirements.
+
+## Documentation maintenance
+
+**IMPORTANT — keep the docs in sync with the code.** This repo treats three documents as living
+artifacts: `report/manual.tex` (developer manual), `report/main.tex` (assignment report), and this
+`CLAUDE.md`. Whenever you **add, remove, or change a source file in a way that alters behaviour,
+structure, the file layout, the CLI/flag surface, the timing methodology, or the rule/edge handling,
+update all three affected documents in the same change** — do not defer it. Specifically:
+
+- **`report/manual.tex`** — update the relevant section and the file map (Table `tab:files`). New
+  source files get a section + a row; changed mechanisms get their walkthrough/snippet updated;
+  removed files get their entry deleted. Keep code snippets matching the real code (em-dashes inside
+  `sourcecode` listings must be `--`; escape `_`, `$`, `#`, `%`, `&` in *captions* and prose).
+- **`report/main.tex`** — update only when results, experiments, or methodology move (e.g. a GPU
+  backend lands, a benchmark is run, a config variation changes). It is the graded report.
+- **`CLAUDE.md`** — update "Current state", the layout tree, and any affected section (Build, Tests,
+  Architecture, Timing) so this file never describes code that no longer exists.
+
+The most common trigger is landing the CUDA or OpenCL backend: that touches the manual's rule,
+CPU-oracle, tests, timing, and roadmap sections; the report's implementation + results sections; and
+this file's "Current state" and layout. After editing, rebuild both PDFs (`latexmk -pdf`) to confirm
+they still compile.

@@ -1,0 +1,1170 @@
+% Template:     Informe LaTeX
+% Documento:    Manual del proyecto - Game of Life en CPU, CUDA y OpenCL
+% Codificación: UTF-8
+%
+% This is the developer MANUAL for the project. It is a standalone document,
+% separate from the graded assignment report (main.tex). Build it the same way:
+%   cd report && latexmk -pdf manual.tex   (or two pdflatex passes)
+
+% CREACIÓN DEL DOCUMENTO
+\documentclass[
+	english,
+	letterpaper, oneside
+]{article}
+
+% INFORMACIÓN DEL DOCUMENTO
+\def\documenttitle {Project Manual: Game of Life on CPU and GPU}
+\def\documentsubtitle {Architecture, mechanism, and a line-by-line code walkthrough}
+\def\documentsubject {Computación en GPU}
+
+\def\documentauthor {Matías Saavedra}
+\def\coursename {Computación en GPU}
+\def\coursecode {CC7515-1}
+
+\def\universityname {Universidad de Chile}
+\def\universityfaculty {Facultad de Ciencias Físicas y Matemáticas}
+\def\universitydepartment {Departamento de Ciencias de la Computación}
+\def\universitydepartmentimage {departamentos/dcc}
+\def\universitydepartmentimagecfg {height=1.57cm}
+\def\universitylocation {Santiago de Chile}
+
+% INTEGRANTES, PROFESORES Y FECHAS
+\def\authortable {
+	\begin{tabular}{ll}
+		Author:
+		& \begin{tabular}[t]{l}
+			Matías Saavedra
+		\end{tabular} \\
+		& \\
+		\multicolumn{2}{l}{Document: developer manual} \\
+		\multicolumn{2}{l}{Last updated: \today} \\
+		\multicolumn{2}{l}{\universitylocation}
+	\end{tabular}
+}
+
+% IMPORTACIÓN DEL TEMPLATE
+\input{template}
+
+% INICIO DE PÁGINAS
+\begin{document}
+
+% PORTADA
+\templatePortrait
+
+% CONFIGURACIÓN DE PÁGINA Y ENCABEZADOS
+\templatePagecfg
+
+% RESUMEN O ABSTRACT
+\begin{abstractd}
+	This document is the developer manual for the project: three
+	implementations of Conway's Game of Life --- a sequential CPU baseline,
+	a CUDA backend and an OpenCL backend --- built to benchmark
+	cells-evaluated-per-second and report the GPU speed-up over the CPU. It
+	explains the architecture from first principles, states the single
+	invariant that shapes every design decision (\emph{the three backends
+	must compute byte-for-byte identical boards so that any difference in
+	speed is the real result}), and then walks the source code function by
+	function, with the C\texttt{++} files explained line by line. At the time
+	of writing the CPU backend is complete and acts as the correctness
+	oracle; the CUDA and OpenCL backends are scaffolded but not yet
+	implemented. The headline metric is fixed throughout:
+	$\text{Mcells/s} = (\text{rows}\times\text{cols}\times\text{gens}) /
+	(t \times 10^{6})$, measured against a no-op renderer so that rendering
+	and host\,$\leftrightarrow$\,device transfers never pollute the number.
+\end{abstractd}
+
+% TABLA DE CONTENIDOS - ÍNDICE
+\templateIndex
+
+% CONFIGURACIONES FINALES
+\templateFinalcfg
+
+% ======================= INICIO DEL DOCUMENTO =======================
+
+\section{What this manual is, and how to read it}
+\label{sec:intro}
+
+This is the engineering manual for the codebase, not the graded report. The
+graded report lives in \texttt{main.tex} and presents experiments and results;
+this manual explains \emph{how the code works and why it is built the way it
+is}. Read it top to bottom the first time: the early sections establish the one
+constraint that everything else follows from, and the later sections assume you
+already understand it.
+
+The manual blends two styles. It is structured like an engineering report
+(setup, mechanism, tables, explicit trade-offs) but written like a deep code
+explanation (every non-obvious decision is traced to \emph{why it exists} and
+\emph{what would break if it were different}). For the C\texttt{++} translation
+units it descends to a line-by-line account; for the headers, which are mostly
+declarations, it summarises and shows the parts that carry real logic.
+
+\paragraph{Build.} The manual compiles with the same vendored template as the
+report:
+
+\begin{sourcecode}{bash}{Building this manual.}
+cd report && latexmk -pdf manual.tex
+# or: pdflatex manual.tex && pdflatex manual.tex   (second pass for the TOC)
+\end{sourcecode}
+
+\section{The problem, and the invariant it forces}
+\label{sec:problem}
+
+The assignment looks like a simulation task but is really a \emph{measurement}
+task. The deliverable is a number and an explanation of that number: how many
+cells per second each backend evaluates, and \emph{why} the GPU wins (or loses)
+at a given grid size. Conway's Game of Life --- here the HighLife variant
+\texttt{B36/S23} --- is only the workload. It is deliberately a good workload
+for the question being asked: a nine-point stencil over one-byte cells is
+arithmetically trivial and memory-bound, so the experiment isolates memory
+bandwidth and launch/transfer overhead, which is exactly the interesting story
+for a GPU report.
+
+Every architectural decision in the codebase serves one goal:
+
+\begin{quote}
+	\emph{Run the identical computation on three backends and trust that any
+	difference in output is a bug, so that any difference in speed is the real
+	result.}
+\end{quote}
+
+Two hard requirements fall out of that sentence, and they explain the entire
+design:
+
+\begin{enumerate}
+	\item \textbf{Bit-for-bit equivalence across backends.} If CPU and GPU
+	      produce different boards, the cells/sec comparison is meaningless.
+	      This forces a \emph{shared} cell layout, a \emph{shared} rule, and
+	      \emph{shared} edge handling.
+	\item \textbf{Measurement that is not polluted by I/O.} The headline metric
+	      is compute throughput, so rendering and host\,$\leftrightarrow$\,device
+	      transfers must be removable from the timed path.
+\end{enumerate}
+
+The rule variant is the one detail most likely to be implemented inconsistently,
+so it is worth stating precisely. It is \emph{not} vanilla Conway:
+
+\begin{itemize}
+	\item a dead cell is born on \textbf{exactly 3 OR exactly 6} live neighbours;
+	\item a live cell survives on 2 or 3 live neighbours;
+	\item everything else dies or stays dead.
+\end{itemize}
+
+The ``birth on 6'' clause is the easy mistake. It must hold identically in CPU,
+CUDA and OpenCL, which is why it is written exactly once (Section
+\ref{sec:liferules}) and pinned by a dedicated test (Section \ref{sec:tests}).
+
+\section{Architecture at a glance}
+\label{sec:arch}
+
+The codebase is a \textbf{strategy pattern}: a backend-agnostic core plus two
+swappable interfaces. The only thing that genuinely differs between backends ---
+the per-generation compute --- sits behind \texttt{ISimEngine}; output sits
+behind \texttt{IRenderer}; the application owns the loop and wires one of each at
+runtime from the parsed configuration.
+
+\begin{sourcecode}{plaintext}{The strategy layout. Parenthesised backends are scaffolded, not yet implemented.}
+Application (main.cpp)  -- owns the loop + Config/CLI
+  |-- ISimEngine   <- CpuEngine | (CudaEngine) | (OpenCLEngine)
+  |-- IRenderer    <- NullRenderer | TextRenderer | (GuiRenderer later)
+  '-- Grid + Pattern  (shared, backend-agnostic state & seed data)
+\end{sourcecode}
+
+The dependency arrows point \emph{from} engines \emph{to} the core, never back ---
+that one-directional dependency is what keeps the core backend-agnostic and lets a
+single host-side harness drive all three engines. The link graph is:
+
+\begin{sourcecode}{plaintext}{Library dependency graph (CMake targets).}
+gol_core  (Grid, Config+CLI, patterns, RLE, interfaces)
+   |-- gol_cpu     (CpuEngine; links Threads::Threads)
+   |-- gol_render  (TextRenderer)
+   '-- (gol_cuda, gol_opencl -- opt-in, not yet present)
+gol  executable  =  gol_core + gol_cpu + gol_render
+\end{sourcecode}
+
+Table \ref{tab:files} is the file map. Header-only units carry no \texttt{.cpp}
+and impose no link dependency.
+
+\begin{table}[H]
+	\centering
+	\caption{File map and status. ``HO'' = header-only (logic lives entirely in
+	the header). The ``\S'' column points to the section that explains it.}
+	\label{tab:files}
+	\begin{tabular}{@{}lll@{}}
+		\toprule
+		\textbf{File} & \textbf{Responsibility} & \textbf{\S} \\
+		\midrule
+		\texttt{include/gol/Grid.hpp}            & Board state; the shared layout (HO) & \ref{sec:grid} \\
+		\texttt{include/gol/LifeRules.hpp}        & The variant rule, written once (HO) & \ref{sec:liferules} \\
+		\texttt{include/gol/Timer.hpp}           & Monotonic host stopwatch (HO) & \ref{sec:timer} \\
+		\texttt{include/gol/ISimEngine.hpp}      & Engine strategy interface (HO) & \ref{sec:interfaces} \\
+		\texttt{include/gol/IRenderer.hpp}       & Renderer strategy interface (HO) & \ref{sec:interfaces} \\
+		\texttt{include/gol/Config.hpp}          & Run configuration struct (HO) & \ref{sec:config} \\
+		\texttt{include/gol/engines/CpuEngine.hpp} & CPU engine declaration & \ref{sec:cpu} \\
+		\texttt{include/gol/render/NullRenderer.hpp} & No-op renderer (HO) & \ref{sec:render} \\
+		\texttt{include/gol/render/TextRenderer.hpp} & ASCII renderer declaration & \ref{sec:render} \\
+		\texttt{include/gol/patterns/Pattern.hpp} & Sparse seed pattern (HO) & \ref{sec:patterns} \\
+		\texttt{include/gol/patterns/RleLoader.hpp} & RLE loader declaration & \ref{sec:patterns} \\
+		\texttt{src/core/Config.cpp}             & CLI parsing & \ref{sec:configcpp} \\
+		\texttt{src/core/main.cpp}               & The loop and the metric & \ref{sec:main} \\
+		\texttt{src/engines/cpu/CpuEngine.cpp}   & CPU engine (seq + parallel) & \ref{sec:cpu} \\
+		\texttt{src/patterns/RleLoader.cpp}      & RLE decoding & \ref{sec:patterns} \\
+		\texttt{src/patterns/Pattern.cpp}        & Stamping a pattern onto a grid & \ref{sec:patterns} \\
+		\texttt{src/render/TextRenderer.cpp}     & ASCII frame dump & \ref{sec:render} \\
+		\texttt{CMakeLists.txt}                  & Build, GPU opt-in gating & \ref{sec:cmake} \\
+		\texttt{tests/*.cpp}                     & Executable spec of the invariants & \ref{sec:tests} \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\section{The shared core}
+\label{sec:core}
+
+The core is everything that must be identical across backends, plus the glue
+that makes the backends interchangeable.
+
+\subsection{\texttt{Grid} --- the spine of cross-backend equivalence}
+\label{sec:grid}
+
+\texttt{Grid} is the single most important object in the project. It is a
+\textbf{flat, row-major \texttt{std::vector<unsigned char>}} where cell $(x,y)$
+lives at index $y\cdot\text{cols}+x$, with $0=$ dead, $1=$ alive.
+
+\begin{sourcecode}{cpp}{include/gol/Grid.hpp --- the load-bearing parts.}
+class Grid {
+public:
+  Grid(std::size_t rows, std::size_t cols, unsigned char fillValue = 0)
+      : rows_(rows), cols_(cols), cells_(rows * cols, fillValue) {}
+
+  // Unchecked access by (x, y): the hot path must stay branch-free.
+  unsigned char& at(std::size_t x, std::size_t y) { return cells_[y * cols_ + x]; }
+  unsigned char  at(std::size_t x, std::size_t y) const { return cells_[y * cols_ + x]; }
+
+  unsigned char* data() { return cells_.data(); }            // for host<->device transfers
+
+  // Deterministic seeding: same seed => same board across all backends.
+  void randomize(std::uint64_t seed, double aliveProbability = 0.3) {
+    std::mt19937_64 rng(seed);
+    std::bernoulli_distribution alive(aliveProbability);
+    for (auto& c : cells_) c = alive(rng) ? 1u : 0u;
+  }
+
+  // Bit-for-bit comparison: the equivalence-test oracle check.
+  bool operator==(const Grid& other) const {
+    return rows_ == other.rows_ && cols_ == other.cols_ && cells_ == other.cells_;
+  }
+private:
+  std::size_t rows_, cols_;
+  std::vector<unsigned char> cells_; // row-major, size rows_ * cols_
+};
+\end{sourcecode}
+
+\paragraph{Why this exact representation.} Each choice is forced by the
+equivalence requirement:
+
+\begin{itemize}
+	\item \textbf{Flat and contiguous}, because a GPU device buffer is a flat
+	      array. A flat \texttt{unsigned char} buffer maps to \texttt{cudaMemcpy}
+	      / \texttt{clEnqueueWriteBuffer} with \emph{zero} translation --- the
+	      same bytes on host and device. A \texttt{vector<vector<>>} would need a
+	      transform on every transfer, and the transform itself could introduce
+	      divergence.
+	\item \textbf{One byte per cell, not one bit.} Bit-packing would be
+	      $8\times$ smaller and use less bandwidth, but it would turn the
+	      neighbour read into a bit-extraction and make the three backends harder
+	      to keep identical. The project accepts the $8\times$ memory cost to keep
+	      the stencil a plain array read. This is also \emph{why} shared memory is
+	      expected to help little on the GPU (Section \ref{sec:timing}): a
+	      one-byte stencil already fits comfortably in cache.
+	\item \textbf{\texttt{at(x,y)} is unchecked.} The simulation hot path
+	      evaluates this billions of times; a bounds branch per access would be a
+	      measurable tax on a memory-bound kernel. Bounds are the caller's
+	      responsibility.
+\end{itemize}
+
+\paragraph{The invariant.} \texttt{Grid} owns no device memory and contains no
+device code. It is pure host state. Engines own their own ping-pong buffers and
+touch the \texttt{Grid} only through \texttt{data()} during
+\texttt{upload()}/\texttt{download()}. \textbf{What would break otherwise:} if the
+\texttt{Grid} held device pointers, the host harness and the equivalence test
+could no longer drive all three engines through one type.
+
+Two methods exist purely for equivalence. \texttt{randomize} uses a seeded
+\texttt{std::mt19937\_64}, so ``same seed $\Rightarrow$ same starting board''
+holds across backends --- without a deterministic seed you could not start CPU
+and GPU from an identical state. \texttt{operator==} compares dimensions
+\emph{and} the full byte vector; this is literally the oracle check the
+cross-backend test will call.
+
+\subsection{\texttt{LifeRules} --- the rule written once, compiled three times}
+\label{sec:liferules}
+
+The rule variant is written exactly once and shared by source between the CPU
+and CUDA backends.
+
+\begin{sourcecode}{cpp}{include/gol/LifeRules.hpp --- the single source of truth for the rule.}
+#ifdef __CUDACC__
+#define GOL_FN __host__ __device__ inline
+#else
+#define GOL_FN inline
+#endif
+
+namespace gol {
+// VARIANT (NOT vanilla Conway):
+//   dead cell born on EXACTLY 3 OR EXACTLY 6 neighbours;
+//   live cell survives on 2 or 3; everything else dies.
+GOL_FN unsigned char nextState(unsigned char alive, int neighbors) {
+  if (alive) {
+    return (neighbors == 2 || neighbors == 3) ? 1u : 0u; // survive
+  }
+  return (neighbors == 3 || neighbors == 6) ? 1u : 0u;   // birth (3 or 6)
+}
+} // namespace gol
+\end{sourcecode}
+
+\paragraph{The mechanism.} When the host C\texttt{++} compiler reads this file,
+\texttt{nextState} is an ordinary \texttt{inline} function used by
+\texttt{CpuEngine}. When \texttt{nvcc} reads the \emph{same} file it defines
+\texttt{\_\_CUDACC\_\_}, so the macro expands to \texttt{\_\_host\_\_
+\_\_device\_\_} and the CUDA kernel calls the byte-for-byte identical logic. CPU
+and CUDA therefore \emph{cannot} diverge on the rule --- they share source.
+
+\paragraph{The acknowledged exception.} OpenCL C cannot \texttt{\#include} a
+C\texttt{++} header, so the plan is to mirror this function in \texttt{kernel.cl}
+(read at runtime, kept diff-able against this header). The project deliberately
+does \emph{not} chase zero duplication between CUDA and OpenCL: two duplicated
+copies that are easy to eyeball-diff beat one clever abstraction that is hard to
+follow. That is a stated trade-off, not an oversight.
+
+\subsection{\texttt{Timer} --- monotonic host timing}
+\label{sec:timer}
+
+\begin{sourcecode}{cpp}{include/gol/Timer.hpp --- the host stopwatch.}
+class Timer {
+public:
+  Timer() : start_(Clock::now()) {}
+  void reset() { start_ = Clock::now(); }
+  double elapsedMillis() const {
+    return std::chrono::duration<double, std::milli>(Clock::now() - start_).count();
+  }
+private:
+  using Clock = std::chrono::steady_clock;   // monotonic, not system_clock
+  Clock::time_point start_;
+};
+\end{sourcecode}
+
+It uses \texttt{steady\_clock}, not \texttt{system\_clock}, because it is
+monotonic: it cannot jump backwards if the wall clock is adjusted mid-run, which
+would corrupt a timing. This is the CPU backend's kernel-timing source; the GPU
+backends will time with \texttt{cudaEvent\_t} / CL events instead.
+
+\subsection{\texttt{ISimEngine} and \texttt{IRenderer} --- the two strategy interfaces}
+\label{sec:interfaces}
+
+\begin{sourcecode}{cpp}{include/gol/ISimEngine.hpp --- the engine contract.}
+class ISimEngine {
+public:
+  virtual ~ISimEngine() = default;
+  virtual void upload(const Grid& initial) = 0;   // host -> "current" device buffer
+  virtual void step() = 0;                         // read current, write next, swap
+  virtual void download(Grid& out) = 0;            // device -> host
+  virtual double lastKernelMillis() const = 0;     // compute-only time of last step()
+  virtual std::string name() const = 0;            // "cpu", "cuda", ...
+};
+\end{sourcecode}
+
+The crucial part is the documented \textbf{ping-pong contract}: an engine keeps
+two equally-sized buffers; \texttt{step()} reads the ``current'' buffer, writes
+the ``next'' buffer, then swaps them. This guarantees \texttt{step()} advances
+exactly one generation and never aliases its input and output.
+
+\paragraph{Why the two-buffer rule is non-negotiable.} A stencil reads each
+cell's neighbours. If \texttt{step()} wrote new values into the same buffer it is
+still reading from, cells processed later in the sweep would see
+\emph{next-generation} neighbours instead of \emph{current-generation} ones, and
+the result would silently depend on traversal order. The two-buffer invariant
+prevents that, and it is stated in the interface so every backend obeys it. GPU
+engines do the swap on the device; only \texttt{upload}/\texttt{download} cross
+the bus.
+
+\begin{sourcecode}{cpp}{include/gol/IRenderer.hpp --- the output contract.}
+class IRenderer {
+public:
+  virtual ~IRenderer() = default;
+  virtual void render(const Grid& grid, std::uint64_t generation) = 0;
+  virtual bool shouldClose() const { return false; } // interactive renderers override
+};
+\end{sourcecode}
+
+\texttt{shouldClose()} defaults to \texttt{false}; only an interactive GUI
+renderer would override it to break the loop early. The key implementation is
+\texttt{NullRenderer} (Section \ref{sec:render}), whose entire purpose is to
+\emph{not exist} in the timed path.
+
+\subsection{\texttt{Config} --- the run configuration}
+\label{sec:config}
+
+\begin{sourcecode}{cpp}{include/gol/Config.hpp --- the knobs (abridged).}
+enum class EngineKind { Cpu, Cuda, OpenCL };
+enum class RendererKind { Null, Text };
+
+struct Config {
+  std::size_t rows = 256, cols = 256;
+  std::uint64_t generations = 100;
+  EngineKind engine = EngineKind::Cpu;
+  RendererKind renderer = RendererKind::Null;
+  unsigned threads = 1;        // 1=sequential, N=parallel, 0=all hardware cores
+  int blockSize = 256;         // GPU: threads per block (swept in the report)
+  bool useShared = false;      // GPU: shared/local-memory tiling
+  bool wrap = false;           // false=bounded edges, true=toroidal
+  std::uint64_t seed = 1;
+  std::optional<std::string> rlePath;
+};
+Config parse(int argc, char** argv);
+\end{sourcecode}
+
+The GPU-only knobs (\texttt{blockSize}, \texttt{useShared}) live here and are
+simply ignored by \texttt{CpuEngine}. That is deliberate: one \texttt{Config}
+type, and a single binary whose flag surface is the \emph{union} over all
+backends, can script the entire benchmark matrix (block sizes
+$\{32,64,128,256\}$ $\times$ shared/no-shared) without recompilation.
+
+\section{Configuration parsing --- \texttt{Config.cpp}}
+\label{sec:configcpp}
+
+This translation unit turns \texttt{argv} into a fully-resolved \texttt{Config}.
+Three file-private helpers carry the logic.
+
+\begin{sourcecode}{cpp}{src/core/Config.cpp --- value consumption and integer parsing.}
+[[noreturn]] void usageAndExit(int code) { /* prints help */ std::exit(code); }
+
+std::string nextValue(int argc, char** argv, int& i, const char* flag) {
+  if (i + 1 >= argc) { std::cerr << "error: " << flag << " requires a value\n";
+                       usageAndExit(2); }
+  return argv[++i];                       // consume the value AND advance caller's i
+}
+
+unsigned long long toULL(const std::string& s, const char* flag) {
+  try { return std::stoull(s); }
+  catch (const std::exception&) {
+    std::cerr << "error: " << flag << " expects an integer, got '" << s << "'\n";
+    usageAndExit(2);
+  }
+}
+\end{sourcecode}
+
+\texttt{usageAndExit} is marked \texttt{[[noreturn]]}: it never returns (it ends
+in \texttt{std::exit}), which lets call sites fall through after calling it
+without the compiler complaining about a missing return value.
+
+\texttt{nextValue} is the mechanism that makes the parse loop correct. It takes
+the loop index \texttt{i} \textbf{by reference}; line 36 checks a token follows
+the flag, and line 40 \emph{pre-increments} \texttt{i} --- this both returns the
+value token and advances the caller's index past it, so the main \texttt{for}
+loop does not re-examine a flag's argument as if it were another flag. Remove the
+\texttt{\&} on \texttt{i} and the parser would try to interpret every value as a
+flag.
+
+\texttt{toULL} centralises integer parsing: \texttt{std::stoull} throws
+\texttt{std::invalid\_argument} on non-numeric input and
+\texttt{std::out\_of\_range} on overflow; both are caught to print a friendly
+message and exit, instead of an uncaught exception aborting the program.
+
+\begin{sourcecode}{cpp}{src/core/Config.cpp --- the dispatch loop (representative branches).}
+Config parse(int argc, char** argv) {
+  Config cfg;                                   // start from defaults
+  for (int i = 1; i < argc; ++i) {              // skip argv[0]
+    const std::string arg = argv[i];
+    if (arg == "-h" || arg == "--help") usageAndExit(0);
+    else if (arg == "-r" || arg == "--rows")
+      cfg.rows = (std::size_t)toULL(nextValue(argc, argv, i, "--rows"), "--rows");
+    else if (arg == "--wrap")  cfg.wrap = true;            // boolean flag, no value
+    else if (arg == "--rle")   cfg.rlePath = nextValue(argc, argv, i, "--rle");
+    else if (arg == "--engine") {
+      const std::string v = nextValue(argc, argv, i, "--engine");
+      if (v == "cpu") cfg.engine = EngineKind::Cpu;
+      else if (v == "cuda") cfg.engine = EngineKind::Cuda;
+      else if (v == "opencl") cfg.engine = EngineKind::OpenCL;
+      else { std::cerr << "error: unknown engine '" << v << "'\n"; usageAndExit(2); }
+    }
+    // ... --cols --gens --threads --seed --renderer --block --shared ...
+    else { std::cerr << "error: unknown option '" << arg << "'\n"; usageAndExit(2); }
+  }
+  return cfg;
+}
+\end{sourcecode}
+
+Each value-taking branch uses the idiom \texttt{toULL(nextValue(...))}, which
+consumes and parses in one expression. \texttt{--wrap}, \texttt{--shared} are
+value-less booleans. \texttt{--block}/\texttt{--shared} are accepted even in a
+CPU-only build --- that is the union-flag-surface point in code.
+
+\paragraph{What can go wrong.} Missing value, non-numeric value, unknown flag,
+and unknown engine/renderer name are all caught. One unguarded edge: a negative
+number passed to \texttt{--rows} is accepted by \texttt{stoull} as a huge
+unsigned value (a known \texttt{stoull} quirk); it would surface immediately as a
+failed allocation.
+
+\section{The application loop and the measurement invariant --- \texttt{main.cpp}}
+\label{sec:main}
+
+\texttt{main.cpp} owns the loop, wires the chosen engine and renderer, seeds the
+board, runs the generations, and prints the metric. It is where requirement~2
+from Section \ref{sec:problem} --- keeping I/O out of the number --- is enforced.
+
+\begin{sourcecode}{cpp}{src/core/main.cpp --- the factory and the seeder.}
+std::unique_ptr<IRenderer> makeRenderer(RendererKind kind) {
+  switch (kind) {
+    case RendererKind::Text: return std::make_unique<TextRenderer>();
+    case RendererKind::Null:
+    default: return std::make_unique<NullRenderer>();   // safe default = benchmark-safe
+  }
+}
+
+void seed(Grid& grid, const Config& cfg) {
+  if (cfg.rlePath) {
+    Pattern p = RleLoader::load(*cfg.rlePath);
+    const std::size_t ox = cfg.cols > p.width  ? (cfg.cols - p.width)  / 2 : 0;
+    const std::size_t oy = cfg.rows > p.height ? (cfg.rows - p.height) / 2 : 0;
+    p.applyTo(grid, ox, oy);                              // centre the pattern
+  } else {
+    grid.randomize(cfg.seed);                             // deterministic fill
+  }
+}
+\end{sourcecode}
+
+The factory's \texttt{default} falling to \texttt{NullRenderer} is a safety
+choice: any unexpected enum value degrades to the benchmark-safe no-op renderer
+rather than crashing. In \texttt{seed}, the ternaries on the origins are
+\emph{not} cosmetic: \texttt{cols}, \texttt{width} are unsigned, so if the
+pattern were wider than the grid, \texttt{cfg.cols - p.width} would underflow to
+a gigantic value and \texttt{applyTo} would clip the whole pattern off-grid. The
+guard makes the origin $0$ in that case so at least the top-left lands.
+
+\begin{sourcecode}{cpp}{src/core/main.cpp --- the loop and the metric.}
+engine.upload(grid);
+
+// Generation 0 is the seed itself: render it before the first step so frames
+// are labelled seed, step 1, step 2, ... The NullRenderer path skips this.
+if (rendering) renderer->render(grid, 0);
+
+Timer wall;
+double kernelMs = 0.0;
+for (std::uint64_t gen = 0; gen < cfg.generations; ++gen) {
+  engine.step();
+  kernelMs += engine.lastKernelMillis();
+  if (rendering) {                       // <-- the whole I/O path is gated here
+    engine.download(grid);
+    renderer->render(grid, gen + 1);     // state after gen+1 steps
+    if (renderer->shouldClose()) break;
+  }
+}
+const double wallMs = wall.elapsedMillis();
+
+const double cells = (double)cfg.rows * (double)cfg.cols * (double)cfg.generations;
+auto mcellsPerSec = [cells](double ms) {
+  return ms > 0.0 ? cells / (ms / 1000.0) / 1e6 : 0.0;
+};
+\end{sourcecode}
+
+\paragraph{The measurement invariant, in code.} The \texttt{rendering} bool
+(set to \texttt{cfg.renderer != RendererKind::Null}) gates the entire
+\texttt{download} + \texttt{render} block. Under \texttt{NullRenderer} the loop
+body is \emph{only} \texttt{step()} plus the time accumulation: no transfers, no
+formatting. That is why the rule ``always benchmark against \texttt{NullRenderer}''
+holds --- it is structurally enforced, not a convention you have to remember.
+
+\paragraph{Two clocks.} \texttt{kernelMs} accumulates each step's
+backend-native compute time (\texttt{lastKernelMillis}); \texttt{wall} measures
+the whole loop. Reporting both separately lets the report distinguish ``the
+kernel got faster'' from ``we are transfer-bound''.
+
+\paragraph{Two subtleties.} The seed is generation $0$ and is rendered
+\emph{before} the first \texttt{step()} so frame labels are honest (this is the
+fix in commit \texttt{0f87fd9}); the \texttt{(double)} casts on the
+\texttt{cells} product avoid 32-bit overflow at large grids (e.g.
+$4096^2\times1000\approx 6.9\times10^{10}$ overflows 32-bit but is exact in
+\texttt{double}), and the \texttt{ms > 0.0} guard avoids a divide-by-zero
+yielding \texttt{inf}/NaN.
+
+The whole body runs inside a \texttt{try/catch} so that, e.g., a missing RLE file
+(which throws in the loader) is reported cleanly on \texttt{stderr} with exit
+code 1. A guard before the loop rejects \texttt{--engine cuda|opencl} because
+those backends are not built yet.
+
+\section{The CPU engine --- \texttt{CpuEngine.cpp}}
+\label{sec:cpu}
+
+This is the most subtle file in the project, and the most important: it is the
+correctness oracle for every future backend, and it implements the sequential
+baseline and the data-parallel version \emph{in one code path}. The reason one
+path can serve both is that the Game of Life step has \textbf{no
+intra-generation data dependencies}: every cell reads only the current buffer and
+writes only the next, so parallelising is \emph{purely} a matter of splitting the
+rows across threads. The per-cell math is identical; only the row range differs.
+
+\subsection{Data model and invariants}
+
+\begin{sourcecode}{cpp}{include/gol/engines/CpuEngine.hpp --- the state (abridged).}
+class CpuEngine final : public ISimEngine {
+  // ... interface methods ...
+  unsigned threads_;  bool wrap_;
+  std::size_t rows_ = 0, cols_ = 0;
+  std::vector<unsigned char> cur_;   // current generation (read by step)
+  std::vector<unsigned char> nxt_;   // scratch for the next generation
+  double lastMs_ = 0.0;
+  // Persistent worker pool (only populated when threads_ >= 2):
+  std::vector<std::thread> workers_;
+  std::unique_ptr<std::barrier<>> barrier_;
+  const unsigned char* src_ = nullptr;   // buffers published to workers each step
+  unsigned char* dst_ = nullptr;
+  std::atomic<bool> stop_{false};
+};
+\end{sourcecode}
+
+\begin{itemize}
+	\item \texttt{cur\_} / \texttt{nxt\_}: the two ping-pong buffers. Invariant:
+	      at the start of every \texttt{step()}, \texttt{cur\_} holds the current
+	      generation; at the end, after a swap, it holds the new one.
+	\item \texttt{workers\_}: a \emph{persistent} thread pool, created only when
+	      \texttt{threads\_ >= 2}. Persistent so per-generation thread
+	      \emph{creation} never enters the timed region.
+	\item \texttt{barrier\_}: a \texttt{std::barrier} with exactly
+	      \texttt{threads\_} participants (main thread + \texttt{threads\_-1}
+	      workers).
+	\item \texttt{src\_} / \texttt{dst\_}: raw pointers ``published'' to the
+	      workers each step so they know which buffers to read/write.
+	\item \texttt{stop\_}: an atomic flag used only at destruction.
+\end{itemize}
+
+The class is non-copyable and non-movable: it owns \texttt{std::thread}s and a
+\texttt{std::barrier}, neither of which has sensible copy/move semantics.
+
+\subsection{Thread resolution, construction, and shutdown}
+
+\begin{sourcecode}{cpp}{src/engines/cpu/CpuEngine.cpp --- lifecycle.}
+unsigned CpuEngine::resolveThreads(unsigned requested) {
+  if (requested != 0) return requested;
+  unsigned hw = std::thread::hardware_concurrency();
+  return hw == 0 ? 1u : hw;            // hardware_concurrency may report 0
+}
+
+CpuEngine::CpuEngine(unsigned threads, bool wrap)
+    : threads_(resolveThreads(threads)), wrap_(wrap) {
+  if (threads_ >= 2) startPool();      // sequential path touches no threads at all
+}
+
+CpuEngine::~CpuEngine() {
+  if (!workers_.empty()) {
+    stop_.store(true, std::memory_order_relaxed);
+    barrier_->arrive_and_wait();       // release parked workers ONE last time
+    for (auto& w : workers_) w.join();
+  }
+}
+\end{sourcecode}
+
+\texttt{resolveThreads} maps the request to a concrete count. \texttt{0} means
+``all cores'', but \texttt{hardware\_concurrency()} is allowed to return $0$ when
+it cannot detect the count, so it falls back to $1$. This guarantees
+\texttt{threads\_ >= 1} always, which everything else relies on (e.g.
+\texttt{rangeFor} divides by it).
+
+The destructor is the trickiest correctness point in the file. At rest, every
+worker is parked at the phase-1 barrier inside \texttt{workerLoop}. To shut down:
+set \texttt{stop\_} (relaxed ordering suffices --- the barrier provides the
+happens-before edge that publishes the flag), then \texttt{arrive\_and\_wait()}
+\emph{once}. That single arrival completes phase 1 and releases every worker,
+which then sees \texttt{stop\_} and \textbf{returns without arriving at the
+phase-2 barrier}. That asymmetry is essential: if the workers hit phase 2 on
+shutdown, the main thread (which is not waiting on phase 2 here) would leave them
+blocked and \texttt{join()} would deadlock.
+
+\subsection{The worker pool and the two-phase handshake}
+
+\begin{sourcecode}{cpp}{src/engines/cpu/CpuEngine.cpp --- pool startup and worker loop.}
+void CpuEngine::startPool() {
+  // participants = main thread + (threads_ - 1) workers = threads_
+  barrier_ = std::make_unique<std::barrier<>>((std::ptrdiff_t)threads_);
+  workers_.reserve(threads_ - 1);
+  for (unsigned id = 1; id < threads_; ++id)        // id 0 is the main thread
+    workers_.emplace_back([this, id] { workerLoop(id); });
+}
+
+void CpuEngine::workerLoop(unsigned id) {
+  while (true) {
+    barrier_->arrive_and_wait();                     // phase 1: wait for work
+    if (stop_.load(std::memory_order_relaxed)) return;
+    auto [yBegin, yEnd] = rangeFor(id);
+    computeRows(src_, dst_, yBegin, yEnd);
+    barrier_->arrive_and_wait();                     // phase 2: signal completion
+  }
+}
+\end{sourcecode}
+
+Worker ids run $1\ldots\text{threads\_}-1$; \textbf{id 0 is the main thread}. The
+main thread doing real work (partition 0) rather than just coordinating is a
+deliberate efficiency choice: with $N$ cores you get $N$ workers, not $N-1$ plus
+an idle coordinator.
+
+The worker is a two-phase handshake. \textbf{Phase 1} (``go'') blocks until
+\texttt{step()} or the destructor arrives. After release the worker checks
+\texttt{stop\_} --- the only way the loop ever ends. Otherwise it computes its row
+slice and signals \textbf{phase 2} (``done''), then loops back to park at phase 1.
+The two distinct barriers per cycle separate ``all threads have started this
+generation'' from ``all threads have finished it''.
+
+\paragraph{Why the lock-free pointer publish is safe.} \texttt{step()} writes
+\texttt{src\_}/\texttt{dst\_} \emph{before} arriving at phase 1; the worker reads
+them \emph{after} leaving phase 1. The barrier establishes a happens-before
+relationship, so the writes are visible without any lock or atomic on the
+pointers themselves.
+
+\subsection{Row partitioning --- \texttt{rangeFor}}
+
+\begin{sourcecode}{cpp}{src/engines/cpu/CpuEngine.cpp --- the half-open row range for a partition.}
+std::pair<std::size_t, std::size_t> CpuEngine::rangeFor(unsigned id) const {
+  const std::size_t base = rows_ / threads_;
+  const std::size_t rem  = rows_ % threads_;
+  const std::size_t begin = id * base + std::min<std::size_t>(id, rem);
+  const std::size_t count = base + (id < rem ? 1u : 0u);
+  return {begin, begin + count};
+}
+\end{sourcecode}
+
+The first \texttt{rem} partitions each get one extra row. Worked example with
+\texttt{rows\_ = 17}, \texttt{threads\_ = 4} ($\text{base}=4$, $\text{rem}=1$):
+
+\begin{table}[H]
+	\centering
+	\caption{\texttt{rangeFor} over 17 rows, 4 threads. Rows are contiguous,
+	with no gaps or overlaps, and sum to 17.}
+	\label{tab:rangefor}
+	\begin{tabular}{@{}ccccc@{}}
+		\toprule
+		\texttt{id} & \texttt{base} & extra & \texttt{begin} & range \\
+		\midrule
+		0 & 4 & 1 & 0  & $[0,5)$ \\
+		1 & 4 & 0 & 5  & $[5,9)$ \\
+		2 & 4 & 0 & 9  & $[9,13)$ \\
+		3 & 4 & 0 & 13 & $[13,17)$ \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+The \texttt{min(id, rem)} term is the clever bit: partitions before \texttt{rem}
+each contributed one extra row to the running offset, so partition \texttt{id}'s
+start is shifted by \texttt{min(id, rem)}. Note that with \texttt{threads\_ == 1}
+this returns $[0, \text{rows\_})$ --- the full grid --- so the sequential sweep is
+the degenerate single-partition case. The \texttt{RemainderRowsHandled} test
+(Section \ref{sec:tests}) targets exactly this logic.
+
+\subsection{Neighbour counting and the stencil}
+
+\begin{sourcecode}{cpp}{src/engines/cpu/CpuEngine.cpp --- both edge modes (condensed).}
+int CpuEngine::countNeighbors(const unsigned char* g, std::size_t x,
+                              std::size_t y) const {
+  int n = 0;
+  if (wrap_) {                                   // toroidal: indices wrap
+    const long cols = (long)cols_, rows = (long)rows_;
+    for (long dy = -1; dy <= 1; ++dy)
+      for (long dx = -1; dx <= 1; ++dx) {
+        if (dx == 0 && dy == 0) continue;        // a cell is not its own neighbour
+        const std::size_t nx = ((long)x + dx + cols) % cols;   // +size before %
+        const std::size_t ny = ((long)y + dy + rows) % rows;
+        n += g[ny * cols_ + nx];
+      }
+  } else {                                       // bounded: OOB counts as dead
+    for (long dy = -1; dy <= 1; ++dy)
+      for (long dx = -1; dx <= 1; ++dx) {
+        if (dx == 0 && dy == 0) continue;
+        const long nx = (long)x + dx, ny = (long)y + dy;
+        if (nx < 0 || ny < 0 || nx >= (long)cols_ || ny >= (long)rows_) continue;
+        n += g[(std::size_t)ny * cols_ + (std::size_t)nx];
+      }
+  }
+  return n;
+}
+
+void CpuEngine::computeRows(const unsigned char* src, unsigned char* dst,
+                            std::size_t yBegin, std::size_t yEnd) const {
+  for (std::size_t y = yBegin; y < yEnd; ++y) {
+    const std::size_t row = y * cols_;           // hoisted out of inner loop
+    for (std::size_t x = 0; x < cols_; ++x)
+      dst[row + x] = nextState(src[row + x], countNeighbors(src, x, y));
+  }
+}
+\end{sourcecode}
+
+Cells are $0/1$, so \emph{summing} neighbour values \emph{is} counting the live
+ones --- no comparison needed. In the toroidal branch the \texttt{+ size} before
+\texttt{\%} is necessary because C\texttt{++}'s \texttt{\%} on a negative operand
+yields a negative result; adding the size first guarantees a non-negative
+dividend, so $-1 \bmod \text{cols}$ becomes $\text{cols}-1$ (wrap to the far
+edge). In the bounded branch, out-of-range neighbours are simply skipped, i.e.
+counted as dead --- this is the \textbf{default} edge mode. Both modes must match
+every backend bit-for-bit, which is why both are tested.
+
+\texttt{computeRows} is the single implementation of the stencil, called by
+\emph{both} the sequential path (full range) and every worker (its slice). One
+implementation of the math is the source of the sequential/parallel equivalence.
+Hoisting \texttt{row = y*cols\_} out of the inner loop saves a multiply per cell.
+
+\subsection{\texttt{upload}, \texttt{step}, \texttt{download}}
+
+\begin{sourcecode}{cpp}{src/engines/cpu/CpuEngine.cpp --- the per-generation core.}
+void CpuEngine::upload(const Grid& initial) {
+  rows_ = initial.rows();  cols_ = initial.cols();
+  cur_.assign(initial.data(), initial.data() + initial.size());
+  nxt_.assign(cur_.size(), 0u);
+}
+
+void CpuEngine::step() {
+  Timer t;                                            // CPU's lastKernelMillis source
+  if (workers_.empty()) {
+    computeRows(cur_.data(), nxt_.data(), 0, rows_);  // SEQUENTIAL: one full sweep
+  } else {
+    src_ = cur_.data();  dst_ = nxt_.data();          // publish buffers to workers
+    barrier_->arrive_and_wait();                      // phase 1: release workers
+    auto [yBegin, yEnd] = rangeFor(0);
+    computeRows(src_, dst_, yBegin, yEnd);            // main thread = partition 0
+    barrier_->arrive_and_wait();                      // phase 2: wait for all
+  }
+  std::swap(cur_, nxt_);                              // the ping-pong
+  lastMs_ = t.elapsedMillis();
+}
+
+void CpuEngine::download(Grid& out) {
+  std::copy(cur_.begin(), cur_.end(), out.data());   // host copy; device->host on GPU
+}
+\end{sourcecode}
+
+\texttt{upload} records the dimensions, copies the seed into \texttt{cur\_}, and
+sizes \texttt{nxt\_} (its initial contents do not matter --- \texttt{step}
+overwrites every cell).
+
+\texttt{step} is timed by the chrono \texttt{Timer}; this is the CPU's
+\texttt{lastKernelMillis()} source. In the \textbf{sequential} branch it is one
+\texttt{computeRows} over $[0,\text{rows\_})$ with zero synchronisation. In the
+\textbf{parallel} branch the main thread mirrors the worker handshake from its
+own side: publish the buffer pointers, phase-1 arrival releases the workers, the
+main thread computes partition 0 itself instead of idling, and phase-2 arrival
+blocks until every worker has finished. The symmetry is the point: \texttt{step}
+runs the same phase1$\rightarrow$compute$\rightarrow$phase2 dance that each
+worker runs, which is why they stay in lockstep generation after generation. The
+\texttt{std::swap} is the ping-pong: \texttt{nxt\_} becomes the new
+\texttt{cur\_}.
+
+\texttt{download} copies the current buffer into the caller's grid. On the CPU
+this is the ``no-op cost'' the interface mentions --- a host copy; on the GPU
+backends this same method will be the device$\rightarrow$host transfer, which is
+precisely why it is excluded from the benchmark.
+
+\paragraph{What would break.} Remove the \texttt{stop\_} check and the destructor
+deadlocks. Swap the order of ``publish \texttt{src\_/dst\_}'' and ``phase-1
+arrive'' and workers could read stale pointers. Give \texttt{nextState} any
+per-cell state and the sequential/parallel equivalence collapses --- it is
+stateless on purpose.
+
+\section{The pattern pipeline --- \texttt{RleLoader.cpp} and \texttt{Pattern.cpp}}
+\label{sec:patterns}
+
+A \texttt{Pattern} is a \emph{sparse} seed: a bounding box plus the list of live
+\texttt{(x,y)} offsets. Sparse because that is the natural output of RLE decoding
+and it decouples a pattern from any particular grid size.
+
+\begin{sourcecode}{cpp}{src/patterns/RleLoader.cpp --- the decode loop (core).}
+std::size_t x = 0, y = 0, count = 0;
+bool haveCount = false;
+for (const char ch : body) {                       // body = payload, newlines dropped
+  if (std::isspace((unsigned char)ch)) continue;
+  if (std::isdigit((unsigned char)ch)) {
+    count = count * 10 + (std::size_t)(ch - '0');  // build multi-digit run lengths
+    haveCount = true; continue;
+  }
+  const std::size_t n = haveCount ? count : 1;     // count defaults to 1
+  bool done = false;
+  switch (ch) {
+    case 'b': x += n; break;                                   // dead run: advance x
+    case 'o': for (std::size_t i=0;i<n;++i) pat.liveCells.emplace_back(x++, y); break;
+    case '$': y += n; x = 0; break;                           // end of row(s)
+    case '!': done = true; break;                             // end of pattern
+    default: break;                                            // ignore unexpected
+  }
+  count = 0; haveCount = false;
+  if (done) break;
+}
+\end{sourcecode}
+
+The RLE grammar is \texttt{<count><tag>} with the count defaulting to $1$. Digits
+accumulate into \texttt{count}; on a tag, \texttt{n} is the accumulated count or
+$1$, and the four tags drive a cursor: \texttt{b} skips dead cells, \texttt{o}
+emits \texttt{n} live cells (advancing \texttt{x}), \texttt{\$} ends rows (and
+\texttt{n\$} skips \texttt{n} blank rows at once --- how RLE compresses empty
+space), \texttt{!} terminates. The payload is read into one \texttt{body} string
+with newlines removed first, because RLE tokens can wrap across lines and cannot
+be decoded line-by-line.
+
+\paragraph{A concrete trace.} The \texttt{birth\_on\_six.rle} payload
+\texttt{3o\$obo\$o!} decodes as:
+
+\begin{sourcecode}{plaintext}{Decoding 3o\$obo\$o! -- six live cells around a DEAD centre (1,1).}
+3o   -> (0,0) (1,0) (2,0)      x=3 y=0
+$    -> y=1 x=0
+o    -> (0,1)                  x=1
+b    -> x=2                    (skips (1,1): the centre stays DEAD)
+o    -> (2,1)                  x=3
+$    -> y=2 x=0
+o    -> (0,2)                  x=1
+!    -> stop
+\end{sourcecode}
+
+That leaves a dead centre $(1,1)$ surrounded by exactly six live neighbours ---
+which under the variant rule must be \emph{born}. This fixture is the payload
+behind the ``birth on 6'' correctness test (Section \ref{sec:tests}).
+
+Two robustness details round out the loader: the header parser
+(\texttt{x = 3, y = 3, rule = B36/S23}) \emph{ignores} the \texttt{rule=} field
+--- the simulation rule lives in code, not data, so a stray fixture cannot
+silently change the simulation --- and if the header omits dimensions, the loader
+infers the bounding box from $\max(x)+1$, $\max(y)+1$ over the decoded cells.
+Opening a missing file throws \texttt{std::runtime\_error}.
+
+\begin{sourcecode}{cpp}{src/patterns/Pattern.cpp --- stamping, with clipping.}
+void Pattern::applyTo(Grid& grid, std::size_t originX, std::size_t originY) const {
+  for (const auto& [dx, dy] : liveCells) {
+    const std::size_t x = originX + dx, y = originY + dy;
+    if (x < grid.cols() && y < grid.rows())   // clip, don't crash
+      grid.at(x, y) = 1u;
+  }
+}
+\end{sourcecode}
+
+Because \texttt{x}, \texttt{y} are unsigned, the single test
+\texttt{x < grid.cols()} rejects both ``too far right'' and any wrap-around at
+once --- no separate \texttt{>= 0} check is needed. Cells that fall outside are
+silently dropped, which is the right behaviour for a centering seeder: a pattern
+slightly larger than the grid still produces a valid, cropped board rather than a
+crash.
+
+\section{Rendering --- \texttt{NullRenderer} and \texttt{TextRenderer}}
+\label{sec:render}
+
+\texttt{NullRenderer::render} is an empty inline body --- header-only because
+there is nothing to define. Its entire purpose is to \emph{not} exist in the
+timed path (Section \ref{sec:main}).
+
+\begin{sourcecode}{cpp}{src/render/TextRenderer.cpp --- one buffer, one write.}
+void TextRenderer::render(const Grid& grid, std::uint64_t generation) {
+  std::string out;
+  out.reserve(grid.size() + grid.rows() + 32);   // cells + one '\n' per row + header
+  out += "generation "; out += std::to_string(generation); out += '\n';
+  for (std::size_t y = 0; y < grid.rows(); ++y) {
+    for (std::size_t x = 0; x < grid.cols(); ++x)
+      out += grid.at(x, y) ? alive_ : dead_;
+    out += '\n';
+  }
+  out += '\n';
+  std::fputs(out.c_str(), stdout);               // single write, no per-cell putchar
+}
+\end{sourcecode}
+
+The mechanism worth noting is that it builds the entire frame into one
+\texttt{std::string} (pre-\texttt{reserve}d so it never reallocates) and emits it
+with a single \texttt{fputs}. Per-cell \texttt{putchar} would lock and flush the
+stream thousands of times per frame. \texttt{at(x, y)} keeps the
+\texttt{(column, row)} argument order matching \texttt{Grid}'s convention even
+though storage is row-major. This renderer is for eyeballing correctness only ---
+never in a benchmark.
+
+\section{Build system --- \texttt{CMakeLists.txt}}
+\label{sec:cmake}
+
+The build must produce a working CPU\,+\,text binary on a machine with no CUDA
+toolkit and no OpenCL. That requirement shapes the GPU targets.
+
+\begin{sourcecode}{cmake}{CMakeLists.txt --- the core/CPU targets and the GPU double-gate.}
+add_library(gol_core STATIC
+    src/core/Config.cpp src/patterns/Pattern.cpp src/patterns/RleLoader.cpp)
+target_include_directories(gol_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+find_package(Threads REQUIRED)                       # std::thread / std::barrier
+add_library(gol_cpu src/engines/cpu/CpuEngine.cpp)
+target_link_libraries(gol_cpu PUBLIC gol_core Threads::Threads)
+
+add_executable(gol src/core/main.cpp)
+target_link_libraries(gol PRIVATE gol_core gol_cpu gol_render)
+
+option(BUILD_CUDA "Build the CUDA engine" OFF)
+if(BUILD_CUDA)
+    set(_cuda_src ${CMAKE_CURRENT_SOURCE_DIR}/src/engines/cuda/CudaEngine.cu)
+    if(EXISTS ${_cuda_src})                           # second gate: source must exist
+        enable_language(CUDA)
+        add_library(gol_cuda ${_cuda_src} .../kernel.cu)
+        target_link_libraries(gol_cuda PUBLIC gol_core)
+    else()
+        message(WARNING "BUILD_CUDA=ON but source does not exist yet; skipping.")
+    endif()
+endif()
+\end{sourcecode}
+
+Each GPU backend is \textbf{double-gated}: an \texttt{option(... OFF)}
+\emph{and} an \texttt{if(EXISTS <source>)} check. Even passing
+\texttt{-DBUILD\_CUDA=ON} today emits a warning and skips the target because the
+\texttt{.cu} source does not exist yet --- it does not fail configuration. The
+OpenCL target follows the identical pattern. \texttt{find\_package(Threads
+REQUIRED)} is what makes \texttt{std::thread}/\texttt{std::barrier} link on the
+CPU engine.
+
+\begin{sourcecode}{bash}{Building and testing.}
+cmake -S . -B build                 # core + CPU + tests (GPU OFF by default)
+cmake --build build
+ctest --test-dir build --output-on-failure
+# GPU opt-in (once the sources exist):
+cmake -S . -B build -DBUILD_CUDA=ON -DBUILD_OPENCL=ON
+\end{sourcecode}
+
+The test \texttt{CMakeLists} prefers a system GoogleTest via
+\texttt{find\_package(GTest CONFIG)} and otherwise \texttt{FetchContent}s
+v1.17.0; it defines \texttt{PATTERNS\_DIR} so tests find the RLE fixtures
+regardless of working directory, and registers each test with
+\texttt{gtest\_discover\_tests}.
+
+\section{Tests --- the executable specification of the invariants}
+\label{sec:tests}
+
+The tests are not an afterthought; they encode the invariants from Section
+\ref{sec:problem} as runnable checks, in dependency order
+(\texttt{CpuEngine} is the oracle, so it is verified first).
+
+\begin{itemize}
+	\item \textbf{\texttt{compile\_smoke\_test.cpp}} includes \emph{every}
+	      interface header (so the scaffolding stays build-clean and mutually
+	      consistent) but deliberately does not call the declared-but-undefined
+	      symbols, so it links without those translation units. Its
+	      \texttt{VariantRule} case pins the rule truth table directly.
+	\item \textbf{\texttt{rules\_test.cpp}} checks \texttt{CpuEngine} on known
+	      patterns: a block is a still-life, a blinker oscillates with period 2,
+	      and --- the defining case --- a dead cell with exactly six live
+	      neighbours is born.
+	\item \textbf{\texttt{cpu\_parallel\_test.cpp}} proves the central design
+	      claim. On a deliberately non-square, non-thread-divisible $128\times130$
+	      grid it asserts thread counts $\{2,3,4,8,0\}$ all match the single-thread
+	      reference \emph{bit-for-bit}, in both edge modes; a second case targets
+	      \texttt{rangeFor}'s remainder logic with $17\times9$ and counts $4,5$.
+	\item \textbf{\texttt{rle\_loader\_test.cpp}} covers parsing, dimensions,
+	      specific coordinates (including that \texttt{birth\_on\_six}'s centre is
+	      dead), the missing-file throw, and stamping with clipping.
+\end{itemize}
+
+\begin{sourcecode}{cpp}{tests/cpu\_parallel\_test.cpp --- the equivalence assertion.}
+const Grid reference = runN(start, 1, wrap, 25);          // sequential oracle
+for (unsigned threads : {2u, 3u, 4u, 8u, 0u /* all hw cores */}) {
+  Grid parallel = runN(start, threads, wrap, 25);
+  EXPECT_TRUE(parallel == reference)
+      << "threads=" << threads << " wrap=" << wrap << " diverged";
+}
+\end{sourcecode}
+
+\paragraph{The fourth test is still pending.} \emph{Cross-backend equivalence} ---
+seed CPU/CUDA/OpenCL identically, run $N$ generations, assert bit-for-bit
+equality against the \texttt{CpuEngine} oracle --- waits on the GPU engines. An
+external oracle is also available: the headless \texttt{bgolly} runner simulates
+\texttt{B36/S23} on an infinite grid, and the \texttt{highlife\_replicator.rle} /
+\texttt{highlife\_spaceship.rle} fixtures already reproduce it bit-for-bit, so
+they make good large-grid cross-checks for the GPU backends.
+
+\section{Timing methodology and the expected GPU story}
+\label{sec:timing}
+
+\subsection{The metric}
+\label{sec:metric}
+
+The headline number is fixed across all three backends:
+
+\begin{equation}
+	\text{Mcells/s} =
+	\frac{\text{rows}\times\text{cols}\times\text{generations}}
+	     {t_{\text{elapsed}}\times 10^{6}}
+\end{equation}
+
+measured against \texttt{NullRenderer} so output and transfer cost never enter
+$t$. Timing is uniform and in-program (not from a profiler) so the three backends
+are measured the same way, exposed through
+\texttt{ISimEngine::lastKernelMillis()}: \texttt{std::chrono} on CPU,
+\texttt{cudaEvent\_t} around the launch on CUDA, and command-queue events with
+\texttt{CL\_QUEUE\_PROFILING\_ENABLE} on OpenCL. Kernel time is reported
+separately from host\,$\leftrightarrow$\,device transfers, and the speed-up is
+
+\begin{equation}
+	S(N) = \frac{T_{\text{CPU}}(N)}{T_{\text{GPU}}(N)}.
+\end{equation}
+
+\subsection{What the numbers should show, and why}
+
+This is a memory-bound, arithmetically trivial nine-point stencil over one-byte
+cells. That single fact predicts the shape of every curve the report will
+produce:
+
+\paragraph{Block size gives a concave curve that plateaus by 128--256.} Below
+that, blocks are too small to hide memory latency (too few warps in flight to
+cover the stalls of a bandwidth-bound kernel); past it, more threads per block do
+not buy more effective bandwidth, so the curve flattens. The mechanism is
+occupancy versus available memory throughput, not arithmetic.
+
+\paragraph{Shared/local memory may give little or even negative gain.} The
+classic stencil optimisation stages a tile plus a halo into shared memory to
+reuse neighbour reads. Here each cell is one byte, so the working set of a tile
+already lives in L1/L2; the explicit staging adds index arithmetic and a barrier
+without saving meaningful DRAM traffic, and can lose. Explaining \emph{why} this
+optimisation underperforms is one of the more interesting parts of the report.
+
+\paragraph{No optimisation helps at small grids.} Kernel-launch and transfer
+overhead dominate when there are few cells, so $S(N) < 1$ for small $N$ and the
+CPU is competitive or faster. The sweeps must therefore run at large $N\times M$
+to see the GPU win. Identifying the threshold $N$ where $S(N) > 1$ sustainably is
+a graded deliverable.
+
+The deep-dive profiling targets the \emph{best} parallel solution only:
+\texttt{ncu} (Nsight Compute) for CUDA kernel-internal metrics --- occupancy,
+stalls, memory throughput (it will not profile OpenCL) --- and \texttt{nsys}
+(Nsight Systems) for the system timeline, which can also trace OpenCL on NVIDIA
+hardware.
+
+\section{Status, roadmap, and how to extend}
+\label{sec:roadmap}
+
+\paragraph{Done.} The backend-agnostic core, the CPU engine (sequential and
+parallel in one path), both renderers, the RLE pipeline, the CLI, and the first
+three test suites. The CPU engine is the reference oracle.
+
+\paragraph{Pending.} \texttt{CudaEngine} (\texttt{src/engines/cuda/}) and
+\texttt{OpenCLEngine} (\texttt{src/engines/opencl/}); the cross-backend
+equivalence test; and the benchmark sweeps, results CSVs, and analysis notebooks
+that populate \texttt{main.tex}.
+
+\paragraph{How a GPU backend slots in.} Implement \texttt{ISimEngine}: own two
+device buffers, \texttt{upload} once, ping-pong on the device inside
+\texttt{step}, \texttt{download} only when rendering. Reuse \texttt{nextState}
+from \texttt{LifeRules.hpp} (CUDA includes it directly; OpenCL mirrors it in
+\texttt{kernel.cl}). Match the edge handling of \texttt{countNeighbors} exactly,
+in both bounded and toroidal modes. Wire it into \texttt{main.cpp}'s engine
+selection and add the cross-backend test against the CPU oracle. Because the
+\texttt{Grid} layout and the metric are already fixed, a correct new backend
+needs no changes to the core, the harness, or the report's measurement code.
+
+\section{Keeping this manual in sync}
+\label{sec:maintenance}
+
+This manual, the graded report (\texttt{main.tex}), and \texttt{CLAUDE.md} are
+treated as living documents. The rule, recorded in \texttt{CLAUDE.md} under
+``Documentation maintenance'', is: whenever a source file is added, removed, or
+changed in a way that alters behaviour or structure, update all three in the
+same change --- this manual's relevant section and file map (Table
+\ref{tab:files}), the report if results or methodology move, and
+\texttt{CLAUDE.md}'s ``Current state'' and layout. The most common trigger will
+be landing the CUDA or OpenCL backend: that touches Sections \ref{sec:liferules},
+\ref{sec:cpu} (as the oracle reference), \ref{sec:tests}, \ref{sec:timing}, and
+\ref{sec:roadmap} here, plus the implementation and results sections of the
+report.
+
+% FIN DEL DOCUMENTO
+\end{document}
