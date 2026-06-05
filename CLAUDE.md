@@ -140,6 +140,11 @@ engines (e.g. `--block`, `--shared`) so the same binary drives every benchmark c
 Headline metric: **cells evaluated per second** = `rows * cols * generations / elapsed`. Always
 benchmark with the `NullRenderer` so output cost doesn't pollute the numbers.
 
+For sweep data, `--csv` prints one data row per run (columns:
+`backend,rows,cols,generations,threads,block,shared,wrap,kernel_ms,wall_ms,mcells_kernel,mcells_wall`)
+and `--csv-header` prints just the header line and exits — so a script does
+`gol --csv-header > out.csv` once, then appends `gol … --csv >> out.csv` per config (Pandas-ready).
+
 Use uniform in-program event timing so all three backends are measured the same way (don't rely on a
 profiler for the comparison numbers), exposed via `ISimEngine::lastKernelMillis()`. Report kernel time
 separately from host<->device transfers:

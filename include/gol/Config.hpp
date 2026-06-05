@@ -73,6 +73,9 @@ struct Config {
   std::uint64_t seed = 1; ///< Seed for Grid::randomize when no pattern is loaded.
 
   std::optional<std::string> rlePath; ///< Optional RLE pattern to stamp instead of a random seed.
+
+  bool csv = false;       ///< Emit one CSV data row instead of the human-readable summary.
+  bool csvHeader = false; ///< Print the CSV header line and exit (for sweep scripts).
 };
 
 /**

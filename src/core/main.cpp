@@ -5,6 +5,7 @@
  */
 
 #include <cstdint>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -91,6 +92,12 @@ std::string backendConfig(const Config& cfg) {
   }
 }
 
+/// @brief CSV header line. Keep the columns in sync with the data row in main().
+const char* csvHeaderLine() {
+  return "backend,rows,cols,generations,threads,block,shared,wrap,"
+         "kernel_ms,wall_ms,mcells_kernel,mcells_wall";
+}
+
 } // namespace
 
 /**
@@ -101,6 +108,11 @@ std::string backendConfig(const Config& cfg) {
  */
 int main(int argc, char** argv) {
   const Config cfg = parse(argc, argv);
+
+  if (cfg.csvHeader) { // single source of truth for the CSV columns
+    std::cout << csvHeaderLine() << "\n";
+    return 0;
+  }
 
   try {
     Grid grid(cfg.rows, cfg.cols);
@@ -142,14 +154,24 @@ int main(int argc, char** argv) {
       return ms > 0.0 ? cells / (ms / 1000.0) / 1e6 : 0.0;
     };
 
-    std::cout << "backend:    " << engine->name() << " (" << backendConfig(cfg) << ")\n"
-              << "grid:       " << cfg.rows << "x" << cfg.cols
-              << "  generations=" << cfg.generations
-              << "  edges=" << (cfg.wrap ? "toroidal" : "bounded") << "\n"
-              << "kernel:     " << kernelMs << " ms  -> "
-              << mcellsPerSec(kernelMs) << " Mcells/s\n"
-              << "wall:       " << wallMs << " ms  -> "
-              << mcellsPerSec(wallMs) << " Mcells/s\n";
+    if (cfg.csv) {
+      // One data row; columns match csvHeaderLine(). booleans as 0/1.
+      std::cout << std::setprecision(10)
+                << engine->name() << ',' << cfg.rows << ',' << cfg.cols << ','
+                << cfg.generations << ',' << cfg.threads << ',' << cfg.blockSize << ','
+                << (cfg.useShared ? 1 : 0) << ',' << (cfg.wrap ? 1 : 0) << ','
+                << kernelMs << ',' << wallMs << ','
+                << mcellsPerSec(kernelMs) << ',' << mcellsPerSec(wallMs) << '\n';
+    } else {
+      std::cout << "backend:    " << engine->name() << " (" << backendConfig(cfg) << ")\n"
+                << "grid:       " << cfg.rows << "x" << cfg.cols
+                << "  generations=" << cfg.generations
+                << "  edges=" << (cfg.wrap ? "toroidal" : "bounded") << "\n"
+                << "kernel:     " << kernelMs << " ms  -> "
+                << mcellsPerSec(kernelMs) << " Mcells/s\n"
+                << "wall:       " << wallMs << " ms  -> "
+                << mcellsPerSec(wallMs) << " Mcells/s\n";
+    }
     return 0;
   } catch (const std::exception& e) {
     std::cerr << "error: " << e.what() << "\n";

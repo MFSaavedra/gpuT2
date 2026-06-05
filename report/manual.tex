@@ -1257,7 +1257,13 @@ are measured the same way, exposed through
 \texttt{ISimEngine::lastKernelMillis()}: \texttt{std::chrono} on CPU,
 \texttt{cudaEvent\_t} around the launch on CUDA, and command-queue events with
 \texttt{CL\_QUEUE\_PROFILING\_ENABLE} on OpenCL. Kernel time is reported
-separately from host\,$\leftrightarrow$\,device transfers, and the speed-up is
+separately from host\,$\leftrightarrow$\,device transfers.
+
+For the sweep data the binary has a CSV mode: \texttt{--csv} prints one data row
+(columns \texttt{backend, rows, cols, generations, threads, block, shared, wrap,
+kernel\_ms, wall\_ms, mcells\_kernel, mcells\_wall}) and \texttt{--csv-header}
+prints just the header and exits, so a script writes the header once and appends
+a row per configuration straight into Pandas. The speed-up is
 
 \begin{equation}
 	S(N) = \frac{T_{\text{CPU}}(N)}{T_{\text{GPU}}(N)}.
@@ -1300,14 +1306,15 @@ hardware.
 \paragraph{Done.} The backend-agnostic core, the CPU engine (sequential and
 parallel in one path), both renderers, the RLE pipeline, the CLI, and the
 \texttt{CudaEngine} (global + shared kernels, \texttt{--block}/\texttt{--shared},
-cudaEvent timing). Test suites: CPU rules, sequential-vs-parallel, RLE loader,
-and the CUDA-vs-CPU cross-backend equivalence (Section \ref{sec:cuda}). The CPU
-engine is the reference oracle.
+cudaEvent timing), and the CSV benchmark-output mode
+(\texttt{--csv}/\texttt{--csv-header}). Test suites: CPU rules,
+sequential-vs-parallel, RLE loader, and the CUDA-vs-CPU cross-backend
+equivalence (Section \ref{sec:cuda}). The CPU engine is the reference oracle.
 
 \paragraph{Pending.} \texttt{OpenCLEngine} (\texttt{src/engines/opencl/}) and its
-cross-backend test; a CSV benchmark-output mode (\texttt{--csv}) and the sweep
-scripts; and the benchmark runs, results CSVs, and analysis notebooks that
-populate \texttt{main.tex} (including the Nsight deep-dive on the best CUDA
+cross-backend test; the sweep scripts; and the benchmark runs, results CSVs, and
+analysis notebooks that populate \texttt{main.tex} (including the Nsight deep-dive
+on the best CUDA
 config).
 
 \paragraph{How a GPU backend slots in.} Implement \texttt{ISimEngine}: own two

@@ -37,6 +37,8 @@ namespace {
       "                       text = scrolling ASCII dump; ansi = in-place animation\n"
       "      --block N        GPU threads per block  (default 256)\n"
       "      --shared         GPU shared-memory tiling\n"
+      "      --csv            print one CSV data row instead of the human summary\n"
+      "      --csv-header     print the CSV header line and exit (for sweep scripts)\n"
       "  -h, --help           show this help\n";
   std::exit(code);
 }
@@ -110,6 +112,10 @@ Config parse(int argc, char** argv) {
       cfg.blockSize = static_cast<int>(toULL(nextValue(argc, argv, i, "--block"), "--block"));
     } else if (arg == "--shared") {
       cfg.useShared = true;
+    } else if (arg == "--csv") {
+      cfg.csv = true;
+    } else if (arg == "--csv-header") {
+      cfg.csvHeader = true;
     } else {
       std::cerr << "error: unknown option '" << arg << "'\n";
       usageAndExit(2);
