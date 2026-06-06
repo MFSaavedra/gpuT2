@@ -73,6 +73,9 @@ public:
   /// @return true once the user has pressed `q` (interactive mode only).
   bool shouldClose() const override { return quit_; }
 
+  /// @return true on a TTY, so the app holds on the final frame until `q`.
+  bool staysOpen() const override { return interactive_; }
+
 private:
   std::string alive_;       ///< Glyph for a live cell.
   std::string dead_;        ///< Glyph for a dead cell.

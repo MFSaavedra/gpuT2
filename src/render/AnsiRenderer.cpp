@@ -36,6 +36,13 @@ constexpr const char* kSyncEnd     = "\033[?2026l";
 constexpr const char* kClearToEol  = "\033[K";      // erase from cursor to end of line
 constexpr const char* kClearBelow  = "\033[J";      // erase from cursor to end of screen
 
+// Scrollbar glyphs: heavy solid = the thumb (where you are), dotted = the track,
+// so the thumb stands out clearly against the rail.
+constexpr const char* kVThumb = "┃"; // ┃ vertical thumb (heavy solid)
+constexpr const char* kVTrack = "┊"; // ┊ vertical track (dotted)
+constexpr const char* kHThumb = "━"; // ━ horizontal thumb (heavy solid)
+constexpr const char* kHTrack = "┈"; // ┈ horizontal track (dotted)
+
 // Saved terminal state so it can be restored from the destructor AND from a
 // signal handler (only one AnsiRenderer exists at a time). On SIGINT/SIGTERM the
 // default handler would leave the terminal in raw mode without these.
@@ -92,6 +99,22 @@ void terminalSize(unsigned& rows, unsigned& cols) {
 /// @brief Saturating subtract for unsigned offsets (clamps at 0).
 std::size_t subSat(std::size_t a, std::size_t b) { return a > b ? a - b : 0; }
 
+/**
+ * @brief Is track index @p i within the scroll thumb?
+ *
+ * Models a scrollbar of @p len cells representing @p total items, of which
+ * @p visible are on screen, scrolled by @p offset in [0, total-visible].
+ * @return true if cell @p i lies under the thumb (heavy glyph), false = track.
+ */
+bool inThumb(std::size_t i, std::size_t len, std::size_t total,
+             std::size_t visible, std::size_t offset) {
+  if (total <= visible || len == 0) return true; // everything visible -> full bar
+  const std::size_t tLen = std::max<std::size_t>(1, len * visible / total);
+  const std::size_t maxStart = len - tLen;
+  const std::size_t start = offset * maxStart / (total - visible);
+  return i >= start && i < start + tLen;
+}
+
 } // namespace
 
 AnsiRenderer::AnsiRenderer(std::string alive, std::string dead, unsigned delayMs)
@@ -144,13 +167,25 @@ void AnsiRenderer::render(const Grid& grid, std::uint64_t generation) {
     unsigned termCols = 80;
     terminalSize(termRows, termCols);
 
-    // Each cell is `cellCols` terminal columns wide (the default "██" is 2). Clip
-    // the board to the visible viewport (in cells).
+    // Each cell is `cellCols` terminal columns wide (the default "██" is 2).
     const std::size_t cellCols =
         std::max<std::size_t>(1, std::max(displayWidth(alive_), displayWidth(dead_)));
-    const std::size_t visRows =
+
+    // Decide which scrollbars are needed (naive clip), then reserve room for them:
+    // one row under the grid for the horizontal bar, one column at the right for
+    // the vertical bar. Only shown when the grid is clipped in that direction.
+    const std::size_t visRows0 =
         std::min<std::size_t>(grid.rows(), termRows > 1 ? termRows - 1u : 1u);
-    const std::size_t visCols = std::min<std::size_t>(grid.cols(), termCols / cellCols);
+    const std::size_t visCols0 = std::min<std::size_t>(grid.cols(), termCols / cellCols);
+    const bool vbar = grid.rows() > visRows0;
+    const bool hbar = grid.cols() > visCols0;
+
+    const std::size_t reservedRows = 1u + (hbar ? 1u : 0u); // header + hbar
+    const std::size_t availRows = termRows > reservedRows ? termRows - reservedRows : 1u;
+    const std::size_t visRows = std::min<std::size_t>(grid.rows(), availRows);
+    const std::size_t availCols =
+        termCols > (vbar ? 1u : 0u) ? termCols - (vbar ? 1u : 0u) : termCols;
+    const std::size_t visCols = std::min<std::size_t>(grid.cols(), availCols / cellCols);
     const bool clipped = visRows < grid.rows() || visCols < grid.cols();
 
     // Drain queued key presses (non-blocking): arrows pan, space/p toggles pause,
@@ -185,7 +220,7 @@ void AnsiRenderer::render(const Grid& grid, std::uint64_t generation) {
 
     const std::size_t glyph = std::max(alive_.size(), dead_.size()); // bytes per cell
     std::string out;
-    out.reserve(visRows * (visCols * glyph + 4) + 128);
+    out.reserve(visRows * (visCols * glyph + 8) + 192);
     out += kSyncBegin;
     out += kCursorHome;
 
@@ -214,7 +249,16 @@ void AnsiRenderer::render(const Grid& grid, std::uint64_t generation) {
       for (std::size_t x = 0; x < visCols; ++x) {
         out += (grid.at(offsetX_ + x, offsetY_ + y) ? alive_ : dead_);
       }
+      if (vbar) // vertical scrollbar: thumb marks the visible row band
+        out += inThumb(y, visRows, grid.rows(), visRows, offsetY_) ? kVThumb : kVTrack;
       out += kClearToEol; // wipe any leftover from a previous wider frame
+      out += '\n';
+    }
+    if (hbar) { // horizontal scrollbar under the grid, aligned to its full width
+      const std::size_t trackW = visCols * cellCols;
+      for (std::size_t tc = 0; tc < trackW; ++tc)
+        out += inThumb(tc, trackW, grid.cols(), visCols, offsetX_) ? kHThumb : kHTrack;
+      out += kClearToEol;
       out += '\n';
     }
     out += kClearBelow; // wipe leftover rows if the terminal shrank

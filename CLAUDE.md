@@ -30,10 +30,12 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   cells read as squares despite the ~1:2 terminal cell aspect ratio; glyph fields are `std::string`
   (configurable). `AnsiRenderer` clips by per-cell display width (2 cols/cell), not raw column count.
   On a TTY it is **interactive**: arrow keys pan the viewport over a grid larger than the screen,
-  `space`/`p` pauses (the sim halts but you can still pan), and `q` quits (via `shouldClose()`). It
-  uses raw, non-blocking input and restores the terminal on exit and on SIGINT/SIGTERM. Pause is
-  contained in `render()` (a `do/while`), so the main loop/engine/interface are untouched; piped
-  (non-TTY), the controls are disabled and the top-left window is shown.
+  `space`/`p` pauses (the sim halts but you can still pan), and `q` quits (via `shouldClose()`).
+  Scrollbars (`┃`/`━` thumbs along the right/bottom edges) show the scroll position when clipped, and
+  the viewer **holds on the final frame until `q`** (via `staysOpen()`). It uses raw, non-blocking
+  input and restores the terminal on exit and on SIGINT/SIGTERM. Pause is contained in `render()` (a
+  `do/while`), so the main loop/engine/interface are untouched; piped (non-TTY), the controls are
+  disabled, `staysOpen()` is false, and the top-left window is shown once.
 - **App** — `main.cpp` owns the loop, wires a CPU engine + renderer, seeds from RLE or a deterministic
   random fill, and prints kernel/wall cells-per-second.
 
@@ -98,7 +100,8 @@ Interfaces:
 - `ISimEngine`: `upload(const Grid&)`, `step()`, `download(Grid&)`, `lastKernelMillis() const`,
   `name() const`, virtual dtor. CUDA/OpenCL engines own their device buffers and do the double-buffer
   ping-pong internally (read A -> write B -> swap).
-- `IRenderer`: `render(const Grid&, uint64_t gen)`, `shouldClose() const = false`. `NullRenderer` does
+- `IRenderer`: `render(const Grid&, uint64_t gen)`, `shouldClose()`/`staysOpen()` (both default false).
+  `NullRenderer` does
   nothing — **always benchmark against it** so render/print cost never pollutes cells/sec. `TextRenderer`
   appends each frame (scrolls); `AnsiRenderer` redraws in place via ANSI escapes and clips to the
   terminal viewport (it never wraps, since a wrapped row would desync its cursor-home math).

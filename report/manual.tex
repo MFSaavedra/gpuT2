@@ -414,6 +414,7 @@ public:
   virtual ~IRenderer() = default;
   virtual void render(const Grid& grid, std::uint64_t generation) = 0;
   virtual bool shouldClose() const { return false; } // interactive renderers override
+  virtual bool staysOpen()  const { return false; }  // hold final frame until quit?
 };
 \end{sourcecode}
 
@@ -582,6 +583,12 @@ for (std::uint64_t gen = 0; gen < cfg.generations; ++gen) {
   }
 }
 const double wallMs = wall.elapsedMillis();
+
+// Interactive viewers hold on the final frame until the user quits; staysOpen()
+// is false for Null/Text, so this is skipped (and never hangs a pipe).
+if (rendering && renderer->staysOpen())
+  while (!renderer->shouldClose()) renderer->render(grid, cfg.generations);
+renderer.reset(); // restore the terminal before printing the summary
 
 const double cells = (double)cfg.rows * (double)cfg.cols * (double)cfg.generations;
 auto mcellsPerSec = [cells](double ms) {
@@ -1148,6 +1155,22 @@ terminal is restored on destruction \emph{and} from a
 \texttt{SIGINT}/\texttt{SIGTERM} handler (so Ctrl-C cannot leave it in raw mode);
 when stdin is not a TTY, the controls are disabled and the top-left window is
 shown.
+
+\paragraph{Scrollbars.} To show \emph{where} the viewport sits, the renderer
+draws a scrollbar in each clipped direction: a vertical bar in the rightmost
+column (a heavy solid thumb, U+2503, over a dotted track, U+250A) and a
+horizontal bar in a row under the grid (heavy U+2501 over dotted U+2508) --- the
+solid thumb stands out against the dotted rail. Each is shown only when the grid
+is clipped that way (one row/column is reserved for it). A shared helper
+maps the visible band onto the bar --- the thumb length is the visible fraction
+($\approx$ len\,$\times$\,visible\,/\,total) and its position tracks the offset
+--- so the bar reads like any GUI scrollbar.
+
+\paragraph{Holding after the run.} \texttt{staysOpen()} returns
+\texttt{interactive\_}, so once the generation loop ends the application keeps
+calling \texttt{render()} on the final board (still panning/pausing) until
+\texttt{q}. Piped output reports \texttt{staysOpen() == false}, so a non-TTY run
+exits normally and never hangs.
 
 \paragraph{Robustness details.} A per-frame \texttt{\textbackslash 033[?2026h/l}
 pair asks the terminal for a \emph{synchronized} (tear-free) update and is
