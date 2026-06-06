@@ -63,16 +63,18 @@
 
 % RESUMEN O ABSTRACT
 \begin{abstractd}
-	Este informe describe el desarrollo y evaluación de tres implementaciones
-	del Juego de la Vida de Conway: una versión secuencial en CPU, una
-	versión paralela en CUDA y una versión paralela en OpenCL. Se incluye
-	una variación de las reglas originales en la que una célula muerta
-	también nace si tiene exactamente $6$ vecinos vivos. Se miden las
-	células evaluadas por segundo para distintos tamaños de cuadrícula
-	$N \times M$, se comparan dos variaciones de configuración del kernel
-	GPU, y se analizan los \emph{speed-up} respecto de la implementación en
-	CPU para determinar a partir de qué tamaño de cuadrícula resulta
-	conveniente utilizar la GPU.
+	Este informe describe el desarrollo y la evaluación de implementaciones del
+	Juego de la Vida de Conway en CPU (secuencial y paralela) y GPU, con el fin de
+	medir las células evaluadas por segundo y el \emph{speed-up} de la GPU respecto
+	de la CPU. Se utiliza una variación de las reglas estándar en la que una célula
+	muerta también nace si tiene exactamente $6$ vecinos vivos (la regla
+	\emph{HighLife}, \texttt{B36/S23}). El núcleo del proyecto es agnóstico al
+	backend: una grilla plana común, una única regla compartida y dos interfaces
+	intercambiables (motor de simulación y \emph{renderer}). A la fecha están
+	implementados y verificados los motores de CPU y CUDA; este último se compara
+	bit a bit contra la CPU como oráculo. Se comparan dos variaciones de
+	configuración del kernel (tamaño de bloque y uso de memoria compartida) y se
+	analiza a partir de qué tamaño de cuadrícula $N \times M$ conviene usar la GPU.
 \end{abstractd}
 
 % TABLA DE CONTENIDOS - ÍNDICE
@@ -86,14 +88,10 @@
 \section{Introducción}
 \label{sec:introduccion}
 
-% (0.5 pt)
-%   - Breve descripción del problema.
-%   - Resultados esperados.
-
-El Juego de la Vida de Conway es un autómata celular bidimensional en el
-que cada celda de una grilla $N \times M$ se encuentra viva o muerta y
-evoluciona en pasos discretos según el estado de sus ocho vecinos. En esta
-tarea se considera la variación de las reglas estándar dada por:
+El Juego de la Vida de Conway es un autómata celular bidimensional en el que cada
+celda de una grilla $N \times M$ se encuentra viva o muerta y evoluciona en pasos
+discretos (generaciones) según el estado de sus ocho vecinos. En esta tarea se
+considera la siguiente \emph{variación} de las reglas estándar:
 
 \begin{itemize}
 	\item Una célula nace en un espacio muerto si tiene exactamente $3$ vecinos vivos.
@@ -101,122 +99,369 @@ tarea se considera la variación de las reglas estándar dada por:
 	\item Una célula también nace en un espacio muerto si tiene exactamente $6$ vecinos vivos.
 \end{itemize}
 
-El objetivo es implementar el algoritmo en CPU (secuencial), CUDA y OpenCL,
-medir su rendimiento en células evaluadas por segundo, y analizar el
-\emph{speed-up} respecto de la versión secuencial.
+La cláusula adicional (nacer con $6$ vecinos) corresponde a la regla conocida como
+\emph{HighLife} (\texttt{B36/S23}). Es el detalle más fácil de implementar de
+forma inconsistente, por lo que debe valer idénticamente en todos los backends.
+
+El objetivo es implementar el algoritmo en CPU (secuencial), CUDA y OpenCL, medir
+su rendimiento en \emph{células evaluadas por segundo}, comparar dos técnicas de
+optimización del kernel y analizar el \emph{speed-up} respecto de la versión
+secuencial, determinando desde qué tamaño de grilla conviene usar la GPU.
 
 \subsection{Resultados esperados}
 \label{sec:resultados-esperados}
 
-Se espera que las implementaciones en GPU superen significativamente a la
-CPU para grillas grandes, donde el paralelismo de datos se vuelve dominante
-frente al costo de transferencias de memoria entre host y device. Para
-grillas pequeñas, en cambio, se espera que el costo de lanzamiento del
-kernel y de transferencia haga que la CPU sea competitiva o incluso más
-rápida.
+El problema es un \emph{stencil} de 9 puntos sobre celdas de 1 byte: muy poco
+cálculo por byte leído, es decir, limitado por ancho de banda de memoria. Se
+espera, en consecuencia:
+
+\begin{itemize}
+	\item Que la GPU supere ampliamente a la CPU para grillas grandes, donde su
+	      mayor ancho de banda y paralelismo dominan frente al costo de
+	      transferencia \emph{host}\,$\leftrightarrow$\,\emph{device}.
+	\item Que para grillas pequeñas el costo de lanzamiento del kernel y de
+	      transferencia haga competitiva (o superior) a la CPU.
+	\item Que el tamaño de bloque dé una curva cóncava que se estabiliza hacia
+	      $128$--$256$ hilos, y que la memoria compartida aporte poco o nada,
+	      precisamente por tratarse de un \emph{stencil} de 1 byte que ya reside
+	      en caché.
+\end{itemize}
 
 \section{Implementación}
 \label{sec:implementacion}
 
-% (1.0 pt)
-%   - Implementación secuencial.
-%   - Implementación paralela en CUDA.
-%   - Implementación paralela en OpenCL.
-%   - Variaciones en configuración.
+\subsection{Arquitectura general}
+\label{sec:arquitectura}
 
-\subsection{Implementación secuencial en CPU}
+El proyecto sigue el patrón \emph{estrategia}: un núcleo agnóstico al backend más
+dos interfaces intercambiables. Lo único que difiere realmente entre backends ---
+el cómputo de una generación --- vive tras \texttt{ISimEngine}; la salida vive
+tras \texttt{IRenderer}; y la aplicación arma en tiempo de ejecución un motor y un
+\emph{renderer} a partir de la configuración. La Figura~\ref{fig:uml} resume las
+clases y relaciones.
+
+\insertimage{uml_architecture}{width=\linewidth}{Diagrama de clases del proyecto.
+La \texttt{Application} posee un \texttt{ISimEngine} y un \texttt{IRenderer} (las
+dos estrategias). \texttt{CpuEngine} y \texttt{CudaEngine} realizan
+\texttt{ISimEngine}; \texttt{OpenCLEngine} está planificado. Las flechas
+punteadas son dependencias: \texttt{CpuEngine} y \texttt{CudaEngine} usan ambos
+\texttt{LifeRules::nextState}. \label{fig:uml}}
+
+Tres decisiones del núcleo hacen posible comparar los backends de forma justa:
+
+\paragraph{Una grilla plana compartida.} \texttt{Grid} es un
+\texttt{std::vector<unsigned char>} contiguo, fila por fila, indexado
+$y\cdot\text{cols}+x$ ($0=$ muerta, $1=$ viva). Es exactamente el formato de un
+buffer de \emph{device}, de modo que subir/bajar la grilla es una copia sin
+traducción y los tres backends operan sobre los mismos bytes. Se acepta el costo
+de 1 byte por celda (en vez de empaquetar bits) para mantener el \emph{stencil}
+como una simple lectura de arreglo, idéntica en CPU y GPU.
+
+\paragraph{Una única regla, compilada para \emph{host} y \emph{device}.} La regla
+variante se escribe una sola vez en \texttt{LifeRules.hpp}. Bajo \texttt{nvcc} se
+califica \texttt{\_\_host\_\_ \_\_device\_\_}, de modo que la CPU y CUDA usan el
+mismo código fuente (Código~\ref{code:liferules}); OpenCL no puede incluir
+encabezados de C\texttt{++}, por lo que replicará esta función en
+\texttt{kernel.cl}.
+
+\begin{sourcecode}[\label{code:liferules}]{cpp}{include/gol/LifeRules.hpp --- la regla variante, compartida por CPU y CUDA.}
+#ifdef __CUDACC__
+#define GOL_FN __host__ __device__ inline
+#else
+#define GOL_FN inline
+#endif
+
+GOL_FN unsigned char nextState(unsigned char alive, int neighbors) {
+  if (alive)
+    return (neighbors == 2 || neighbors == 3) ? 1u : 0u; // sobrevive
+  return (neighbors == 3 || neighbors == 6) ? 1u : 0u;   // nace (3 o 6)
+}
+\end{sourcecode}
+
+\paragraph{Manejo de bordes idéntico.} Por defecto los bordes son acotados (un
+vecino fuera de rango cuenta como muerto); con \texttt{--wrap} se vuelven
+toroidales. Ambos modos deben coincidir bit a bit entre backends, y se verifican
+en las pruebas (Sección~\ref{sec:verificacion}).
+
+\paragraph{Contrato de doble buffer (\emph{ping-pong}).} Cada motor mantiene dos
+buffers; \texttt{step()} lee el ``actual'', escribe el ``siguiente'' y los
+intercambia, de modo que una llamada avanza exactamente una generación y nunca
+solapa entrada y salida. Las GPU hacen el intercambio en el \emph{device}; la
+grilla del \emph{host} solo se toca en \texttt{upload()}/\texttt{download()}.
+
+\subsection{Implementación en CPU (secuencial y paralela)}
 \label{sec:impl-cpu}
 
-Describir aquí la estructura del programa secuencial: representación de la
-grilla como arreglo plano de \texttt{unsigned char}, doble buffer
-(\texttt{current}/\texttt{next}), recorrido por filas y columnas, y conteo
-de vecinos con condiciones de borde.
+Una sola clase, \texttt{CpuEngine}, sirve tanto al \emph{baseline} secuencial como
+a la versión paralela, porque el paso del Juego de la Vida no tiene dependencias
+intra-generación: cada celda lee solo el buffer actual y escribe el siguiente.
+Paralelizar es, entonces, repartir las \emph{filas} entre hilos; la regla por
+celda es idéntica. El recuento de vecinos honra el modo de borde y suma los
+valores $0/1$ de los vecinos; la regla compartida (\texttt{nextState}) decide el
+estado siguiente.
+
+El reparto es por bandas de filas contiguas (buen comportamiento de caché y
+escrituras disjuntas). Con \texttt{threads == 1} no se crea ningún hilo ni
+barrera: el barrido secuencial es el caso degenerado de una sola partición. Con
+\texttt{threads >= 2} se usa un \emph{pool} de hilos persistente sincronizado con
+una \texttt{std::barrier} de dos fases, de modo que el costo de crear hilos no
+contamina la métrica. El valor \texttt{threads == 0} se resuelve a
+\texttt{std::thread::hardware\_concurrency()}.
+
+\begin{sourcecode}{cpp}{src/engines/cpu/CpuEngine.cpp --- un paso (mismo código para secuencial y paralelo).}
+void CpuEngine::step() {
+  Timer t;
+  if (workers_.empty()) {                  // secuencial: un solo barrido, sin sincronización
+    computeRows(cur_.data(), nxt_.data(), 0, rows_);
+  } else {                                  // paralelo: bandas de filas
+    src_ = cur_.data();
+    dst_ = nxt_.data();
+    barrier_->arrive_and_wait();            // libera a los workers sobre sus filas
+    auto [yBegin, yEnd] = rangeFor(0);
+    computeRows(src_, dst_, yBegin, yEnd);   // el hilo main calcula la partición 0
+    barrier_->arrive_and_wait();            // espera a que todas las particiones terminen
+  }
+  std::swap(cur_, nxt_);                     // ping-pong
+  lastMs_ = t.elapsedMillis();              // cronometraje con std::chrono
+}
+\end{sourcecode}
+
+Como secuencial y paralelo ejecutan la misma función de cómputo
+(\texttt{computeRows}) y solo difieren en el rango de filas, producen tableros
+idénticos; esto se comprueba en las pruebas (Sección~\ref{sec:verificacion}).
 
 \subsection{Implementación paralela en CUDA}
 \label{sec:impl-cuda}
 
-Describir aquí la organización del \emph{grid} y los \emph{blocks}, el
-mapeo de un hilo por celda, el uso (o no) de memoria compartida con
-\emph{halo}, y la sincronización entre generaciones.
+\texttt{CudaEngine} usa un hilo por celda sobre una grilla 2D de bloques. Posee
+dos buffers de \emph{device} y realiza el \emph{ping-pong} en el \emph{device}; la
+grilla del \emph{host} solo se toca en \texttt{upload} (copia H2D) y
+\texttt{download} (D2H). El encabezado del motor no incluye tipos de CUDA (los
+manejadores se guardan como punteros opacos), de modo que \texttt{main.cpp}
+compila con el compilador anfitrión y solo los \texttt{.cu} pasan por
+\texttt{nvcc}.
+
+Hay dos kernels seleccionables en tiempo de ejecución. El de memoria global lee
+los ocho vecinos directamente; reutiliza \texttt{nextState} de
+\texttt{LifeRules.hpp} y replica el manejo de bordes de la CPU
+(Código~\ref{code:cudakernel}).
+
+\begin{sourcecode}[\label{code:cudakernel}]{cpp}{src/engines/cuda/kernel.cu --- kernel de memoria global (un hilo por celda).}
+__global__ void lifeGlobal(const unsigned char* src, unsigned char* dst,
+                           int rows, int cols, bool wrap) {
+  const int col = blockIdx.x * blockDim.x + threadIdx.x;
+  const int row = blockIdx.y * blockDim.y + threadIdx.y;
+  if (col >= cols || row >= rows) return;
+  int n = 0;
+  for (int dy = -1; dy <= 1; ++dy)
+    for (int dx = -1; dx <= 1; ++dx) {
+      if (dx == 0 && dy == 0) continue;
+      int nc = col + dx, nr = row + dy;
+      if (wrap) { nc = (nc + cols) % cols; nr = (nr + rows) % rows; }
+      else if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue; // borde: muerto
+      n += src[(size_t)nr * cols + nc];
+    }
+  const size_t idx = (size_t)row * cols + col;
+  dst[idx] = nextState(src[idx], n);   // misma regla que la CPU
+}
+\end{sourcecode}
+
+El lanzador mapea el tamaño de bloque sobre un \emph{tile} 2D de ancho fijo $32$ y
+elige el kernel. El ancho $32$ alinea los accesos: hilos consecutivos de un
+\emph{warp} leen celdas (de 1 byte) consecutivas de una fila, logrando lecturas
+coalescentes, lo correcto para un \emph{stencil} limitado por memoria.
+
+\begin{sourcecode}{cpp}{src/engines/cuda/kernel.cu --- mapeo de bloque y elección de kernel.}
+const int bx = 32;                          // filas de 32 -> lecturas coalescentes
+const int by = (blockSize + bx - 1) / bx;   // 32/64/128/256 -> by = 1/2/4/8
+dim3 block(bx, by);
+dim3 grid((cols + bx - 1) / bx, (rows + by - 1) / by);
+if (useShared)
+  lifeShared<<<grid, block, (bx + 2) * (by + 2)>>>(src, dst, rows, cols, wrap);
+else
+  lifeGlobal<<<grid, block>>>(src, dst, rows, cols, wrap);
+\end{sourcecode}
+
+El kernel de memoria compartida (\texttt{--shared}) primero carga
+cooperativamente un \emph{tile} de $(bx{+}2)\times(by{+}2)$ celdas (las del bloque
+más un halo de una celda) en memoria compartida ---aplicando el mismo manejo de
+borde durante la carga del halo--- y luego lee los vecinos desde el \emph{tile}.
+Ambos kernels producen resultados idénticos al oráculo de CPU.
+
+El cómputo se cronometra con \texttt{cudaEvent\_t} alrededor del lanzamiento, de
+modo que \texttt{lastKernelMillis()} reporta solo el tiempo del kernel, excluyendo
+las transferencias; es el análogo en GPU del cronometraje con \texttt{std::chrono}
+de la CPU.
+
+\begin{sourcecode}{cpp}{src/engines/cuda/CudaEngine.cu --- un paso con cronometraje por eventos.}
+void CudaEngine::step() {
+  cudaEventRecord(start);
+  launchLifeStep(dCur_, dNxt_, rows_, cols_, wrap_, blockSize_, useShared_);
+  cudaEventRecord(stop);
+  cudaEventSynchronize(stop);
+  cudaEventElapsedTime(&ms, start, stop);  // solo el kernel, sin H2D/D2H
+  lastMs_ = ms;
+  std::swap(dCur_, dNxt_);                  // ping-pong en el device
+}
+\end{sourcecode}
+
+El \emph{target} de compilación es \texttt{sm\_75} (la GPU de pruebas, una
+GTX~1660~Ti), con \texttt{-lineinfo} para que Nsight Compute pueda atribuir tiempo
+a líneas de código fuente.
 
 \subsection{Implementación paralela en OpenCL}
 \label{sec:impl-opencl}
 
-Describir aquí la creación del contexto, la cola de comandos, la
-compilación del kernel y la configuración del \emph{work-group}. Notar las
-diferencias con CUDA.
+\textit{Pendiente.} El motor de OpenCL (\texttt{OpenCLEngine}) aún no está
+implementado. Seguirá el mismo diseño que CUDA: dos buffers de \emph{device},
+\emph{ping-pong} en el \emph{device}, los mismos dos kernels (global y con memoria
+local) y los mismos botones \texttt{--block}/\texttt{--shared}. La regla y el
+manejo de borde se replicarán en un \texttt{kernel.cl} en C plano, leído en tiempo
+de ejecución y mantenido diff-eable contra \texttt{LifeRules.hpp}. El cronometraje
+del kernel usará eventos de la cola de comandos con
+\texttt{CL\_QUEUE\_PROFILING\_ENABLE}. Se verificará bit a bit contra el oráculo
+de CPU, igual que CUDA.
 
-\subsection{Variaciones en configuración}
+\subsection{Variaciones de configuración}
 \label{sec:variaciones}
 
-Se eligieron las siguientes dos opciones a comparar (de las tres
-disponibles en el enunciado):
+De las tres opciones del enunciado se eligieron dos:
 
 \begin{enumerate}
-	\item Tamaños de bloque $32$, $64$, $128$ y $256$.
-	\item Uso de memoria local por bloque \emph{vs.} sin memoria local.
+	\item \textbf{Tamaño de bloque} $\in \{32, 64, 128, 256\}$ (botón \texttt{--block}).
+	\item \textbf{Memoria local por bloque} \emph{vs.} sin memoria local (botón \texttt{--shared}).
 \end{enumerate}
 
-% Reemplazar por la elección real si difiere.
+No se eligió la opción de arreglos 2D \emph{vs.} mapeo a 1D porque el diseño fija
+una grilla plana 1D compartida por todos los backends; usar arreglos 2D iría en
+contra de esa decisión arquitectónica. Ambas variaciones son seleccionables en
+tiempo de ejecución, de modo que un único binario ejecuta toda la matriz de
+experimentos.
+
+\subsection{Verificación de correctitud}
+\label{sec:verificacion}
+
+\texttt{CpuEngine} es el oráculo de referencia. Las pruebas (GoogleTest)
+verifican, en orden de dependencia:
+
+\begin{itemize}
+	\item \textbf{Regla variante en CPU}: un bloque permanece estático, un
+	      \emph{blinker} oscila con período 2 y una célula muerta con exactamente
+	      $6$ vecinos nace (el caso que define la variante).
+	\item \textbf{Equivalencia secuencial \emph{vs.} paralela}: misma semilla y
+	      mismas generaciones producen un tablero idéntico bit a bit para distinto
+	      número de hilos y ambos modos de borde, incluso en grillas no divisibles.
+	\item \textbf{Equivalencia entre backends (CUDA)}: \texttt{cuda\_equivalence\_test.cpp}
+	      siembra CUDA y CPU igual y exige igualdad bit a bit contra el oráculo
+	      para los tamaños de bloque $\{32,64,128,256\}$, kernels global/compartido
+	      y ambos modos de borde. OpenCL seguirá el mismo patrón.
+\end{itemize}
+
+Adicionalmente, el runner \texttt{bgolly} de Golly (grilla infinita) simula
+exactamente \texttt{B36/S23} y sirve como oráculo externo independiente.
+
+\subsection{Metodología de medición}
+\label{sec:metodologia}
+
+La métrica principal es \emph{células evaluadas por segundo}:
+%
+\begin{equation}
+	\text{Mcélulas/s} =
+	\frac{N \cdot M \cdot G}{t_{\text{transcurrido}} \times 10^{6}},
+	\label{eq:metrica}
+\end{equation}
+%
+con $G$ el número de generaciones. El cronometraje es uniforme y en programa (no
+desde un \emph{profiler}), expuesto por \texttt{ISimEngine::lastKernelMillis()}:
+\texttt{std::chrono} en CPU, \texttt{cudaEvent\_t} en CUDA y eventos de cola en
+OpenCL. Se reporta el tiempo de kernel por separado del de transferencias, y se
+mide siempre con el \texttt{NullRenderer} para que el costo de salida y de
+transferencia no contamine la métrica. El \emph{speed-up} es
+%
+\begin{equation}
+	S(N) = \frac{T_{\text{CPU}}(N)}{T_{\text{GPU}}(N)}.
+	\label{eq:speedup}
+\end{equation}
+
+Para los barridos, el binario ofrece un modo CSV: \texttt{--csv} imprime una fila
+por corrida (columnas \texttt{backend, rows, cols, generations, threads, block,
+shared, wrap, kernel\_ms, wall\_ms, mcells\_kernel, mcells\_wall}) y
+\texttt{--csv-header} imprime solo el encabezado; así un \emph{script} escribe el
+encabezado una vez y agrega una fila por configuración, lista para Pandas.
+
+\subsection{Ejecutables y flujo de uso}
+\label{sec:ejecutables}
+
+El proyecto compila un único ejecutable \texttt{gol} que arma en tiempo de
+ejecución el motor (\texttt{--engine cpu|cuda|opencl}) y el \emph{renderer}
+(\texttt{--renderer null|text|ansi}) según la línea de comandos, siembra la grilla
+(con una semilla aleatoria determinista o un patrón RLE) y ejecuta el bucle de
+generaciones. Bajo \texttt{NullRenderer} el bucle es solo \texttt{step()}, sin
+transferencias ni dibujado, de modo que la medición no se contamina. Los motores
+de GPU son opcionales en CMake (\texttt{-DBUILD\_CUDA=ON}); el binario funciona
+en una máquina sin CUDA ni OpenCL.
 
 \section{Resultados}
 \label{sec:resultados}
 
-% (2.0 pt)
-%   - Describir experimentos a realizar.
-%   - Resultados por tamaño de cuadrícula (CPU/GPU).
-%   - Resultados de experimentos para las opciones elegidas.
-
-\subsection{Diseño de experimentos}
+\subsection{Configuración experimental}
 \label{sec:experimentos}
 
-Se midió el número de células evaluadas por segundo en grillas cuadradas
-de tamaños $N \in \{128, 256, 512, 1024, 2048, 4096\}$, ejecutando un
-número fijo de generaciones por configuración y promediando varias
-corridas independientes.
+Las mediciones se realizan en un equipo con procesador Intel Core i7-9750H
+(6~núcleos físicos / 12 hilos, caché L2 de 1{,}5~MiB y L3 de 12~MiB) y GPU NVIDIA
+GeForce GTX~1660~Ti (Turing, capacidad de cómputo $7.5$), bajo Linux, con CUDA y
+compilación en C\texttt{++}23. El motor de CPU se mide con $1$ hilo (\emph{baseline}
+secuencial) y con todos los hilos disponibles; el de CUDA con los cuatro tamaños
+de bloque y con/sin memoria compartida.
+
+Se mide el número de células evaluadas por segundo (Ecuación~\ref{eq:metrica})
+para grillas cuadradas $N \in \{128, 256, 512, 1024, 2048, 4096\}$, con un número
+fijo de generaciones por configuración y promediando varias corridas
+independientes (tomando el mejor tiempo para reducir el ruido de \emph{turbo} y
+contención). Todas las mediciones usan el \texttt{NullRenderer}.
 
 \subsection{CPU vs GPU por tamaño de cuadrícula}
 \label{sec:res-cpu-gpu}
 
-Insertar aquí la tabla y gráficos comparativos.
+\textit{Pendiente: ejecutar el barrido y presentar aquí la tabla y los gráficos
+de Mcélulas/s en función de $N$ para CPU (1 hilo y multi-hilo) y CUDA (mejor
+configuración).}
 
 \subsection{Resultados de las opciones elegidas}
 \label{sec:res-opciones}
 
-Insertar aquí las curvas para cada tamaño de bloque y para la comparación
-con/sin memoria local.
+\textit{Pendiente: curvas de Mcélulas/s por tamaño de bloque $\{32,64,128,256\}$ y
+comparación con/sin memoria compartida, para los $N$ grandes.}
 
 \section{Análisis de resultados}
 \label{sec:analisis}
 
-% (1.5 pt)
-%   - Speed-up comparando versiones paralelas con CPU.
-%   - Calcular desde qué tamaño de cuadrícula conviene usar la GPU.
-
 \subsection{Speed-up}
 \label{sec:speedup}
 
-Reportar $S(N) = T_{\text{CPU}}(N) / T_{\text{GPU}}(N)$ para cada
-configuración.
+\textit{Pendiente: reportar $S(N)$ (Ecuación~\ref{eq:speedup}) por configuración a
+partir de los datos de la Sección~\ref{sec:resultados}.}
 
 \subsection{Umbral de conveniencia GPU}
 \label{sec:umbral}
 
-Identificar el tamaño de grilla a partir del cual $S(N) > 1$ de manera
-sostenida.
+\textit{Pendiente: identificar el tamaño de grilla a partir del cual $S(N) > 1$ de
+manera sostenida, considerando el costo de transferencia en grillas pequeñas.}
 
 \subsection{Perfilamiento (Nsight / Chrono)}
 \label{sec:profiling}
 
-Describir hallazgos del \emph{profiling} de la mejor solución CUDA con
-Nsight (o Nvprof) y de la mejor solución OpenCL con \texttt{std::chrono}.
+\textit{Pendiente: hallazgos del \emph{profiling} de la mejor solución CUDA con
+Nsight Systems (línea de tiempo) y Nsight Compute (métricas internas del kernel:
+ocupación, \emph{stalls}, throughput de memoria), y de la mejor solución OpenCL
+con \texttt{std::chrono}.}
 
 \section{Conclusiones}
 \label{sec:conclusiones}
 
-% (1.0 pt)
-
-Resumir los principales hallazgos y limitaciones encontradas.
+\textit{Pendiente: resumir los principales hallazgos (speed-up alcanzado, umbral
+de conveniencia, efecto de las dos variaciones de configuración) y las
+limitaciones encontradas.}
 
 % FIN DEL DOCUMENTO
 \end{document}
