@@ -112,8 +112,8 @@ secuencial, determinando desde qué tamaño de grilla conviene usar la GPU.
 \label{sec:resultados-esperados}
 
 El problema es un \emph{stencil} de 9 puntos sobre celdas de 1 byte: muy poco
-cálculo por byte leído, es decir, limitado por ancho de banda de memoria. Se
-espera, en consecuencia:
+cálculo por byte leído, es decir, limitado por ancho de banda de memoria (las cotas
+teóricas se derivan en la Sección~\ref{sec:cotas}). Se espera, en consecuencia:
 
 \begin{itemize}
 	\item Que la GPU supere ampliamente a la CPU para grillas grandes, donde su
@@ -400,6 +400,228 @@ generaciones. Bajo \texttt{NullRenderer} el bucle es solo \texttt{step()}, sin
 transferencias ni dibujado, de modo que la medición no se contamina. Los motores
 de GPU son opcionales en CMake (\texttt{-DBUILD\_CUDA=ON}); el binario funciona
 en una máquina sin CUDA ni OpenCL.
+
+\section{Cotas teóricas de rendimiento}
+\label{sec:cotas}
+
+Antes de medir conviene fijar el techo: ¿cuál es el máximo de Mcélulas/s que el
+hardware permitiría en el mejor de los casos? El paso del Juego de la Vida es un
+\emph{stencil} de 9 puntos sobre celdas de 1~byte: por cada celda se leen sus ocho
+vecinos, se hacen unas pocas sumas enteras y dos comparaciones, y se escribe un
+byte. La razón entre cálculo y tráfico de memoria (la \emph{intensidad aritmética})
+es minúscula, de modo que el factor limitante no es la capacidad de cómputo sino el
+\textbf{ancho de banda de memoria}. Esta sección deriva, desde el hardware del equipo
+de pruebas, una cota superior de rendimiento para cada backend y la cota de
+\emph{speed-up} que de ellas se desprende; las mediciones
+(Secciones~\ref{sec:resultados} y~\ref{sec:analisis}) se interpretan contra ellas.
+
+\subsection{Modelo \emph{roofline}}
+\label{sec:roofline}
+
+Si una generación está limitada por memoria, su tiempo lo fija cuántos bytes deben
+viajar desde/hacia la DRAM, no cuántas operaciones se ejecutan. Sea $B$ el ancho de
+banda sostenido de memoria (bytes/s) y $q$ el tráfico de DRAM por celda y por
+generación (bytes/celda). El número de células evaluadas por segundo no puede
+superar
+%
+\begin{equation}
+	P_{\max} = \frac{B}{q}.
+	\label{eq:roofline}
+\end{equation}
+%
+El valor de $q$ depende del reúso de datos:
+
+\begin{itemize}
+	\item \textbf{Reúso ideal} ($q = 2$): cada celda se trae de la DRAM una sola vez
+	      ---sirve como vecina de sus ocho contiguas desde la caché--- y se escribe
+	      una vez. Es el piso de tráfico: una lectura y una escritura por celda.
+	\item \textbf{Sin reúso} ($q \approx 10$): cada hilo lee los nueve bytes de su
+	      vecindario $3\times3$ desde la memoria, más la escritura. Es el techo de
+	      tráfico de un \emph{stencil} ingenuo que no comparte lecturas.
+\end{itemize}
+
+La cota de cómputo queda muy por encima: la GTX~1660~Ti entrega
+$1536 \times 2 \times 2{,}1\,\text{GHz} \approx 6{,}5$~TFLOP/s que, repartidos entre
+las $\sim$10 operaciones enteras por celda, darían cientos de Gcélulas/s ---un orden
+de magnitud sobre cualquier cota de memoria---. Por eso el problema es claramente
+\emph{memory-bound} y la Ecuación~\ref{eq:roofline} es la que aplica.
+
+\subsection{Hardware del equipo de pruebas}
+\label{sec:hw}
+
+La Tabla~\ref{tab:hw} resume los recursos relevantes. Los anchos de banda de memoria
+son los teóricos (de catálogo); la velocidad de la DRAM es la máxima soportada por el
+procesador (DDR4-2666, doble canal).
+
+\begin{table}[H]
+	\centering
+	\caption{Especificaciones del equipo de pruebas que fijan las cotas.}
+	\label{tab:hw}
+	\begin{tabular}{@{}lll@{}}
+		\toprule
+		\textbf{Recurso} & \textbf{Especificación} & \textbf{Magnitud derivada} \\
+		\midrule
+		CPU          & Intel Core i7-9750H, 6C/12T          & 2{,}6--4{,}5 GHz \\
+		L1d / L1i    & 32 KiB / 32 KiB por núcleo           & --- \\
+		L2           & 256 KiB por núcleo (1{,}5 MiB)       & --- \\
+		L3           & 12 MiB compartida                    & --- \\
+		DRAM         & DDR4-2666, doble canal               & $\approx 42{,}7$ GB/s \\
+		GPU          & GTX 1660 Ti (Turing, \texttt{sm\_75}) & 1536 \emph{cores} \\
+		VRAM         & 6 GiB GDDR6, bus 192 bits, 12 Gbit/s/pin & $288$ GB/s \\
+		Caché L2 GPU & 1{,}5 MiB                             & --- \\
+		PCIe         & Gen3 $\times$16                      & $\approx 15{,}8$ GB/s \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\subsection{Cota de la GPU (GDDR6)}
+\label{sec:cota-gpu}
+
+La VRAM es GDDR6 sobre un bus de 192 bits a 12~Gbit/s por pin. Como GDDR6 transfiere
+en ambos flancos del reloj (DDR), el reloj de memoria que reporta la GPU
+($6001$~MHz) se duplica a $\sim$12~Gbit/s efectivos por pin, de donde
+%
+\begin{equation}
+	B_{\text{GPU}} = 12\ \tfrac{\text{Gbit}}{\text{s}\cdot\text{pin}} \times
+	\frac{192\ \text{bits}}{8} = 288\ \text{GB/s}.
+	\label{eq:bw-gpu}
+\end{equation}
+%
+Sustituyendo en la Ecuación~\ref{eq:roofline} (Tabla~\ref{tab:cotas}): con reúso
+ideal la GPU podría llegar a $144$~Gcélulas/s, y un kernel ingenuo (sin reúso) queda
+acotado a $\approx 28{,}8$~Gcélulas/s. El kernel de memoria global de esta tarea
+---que lee los nueve vecinos directamente--- vive cerca de este segundo techo:
+alcanza $\approx 28$~Gcélulas/s, lo que implica $q \approx 288/28 \approx 10$
+bytes/celda; esto es, prácticamente sin reúso de lecturas a nivel de DRAM efectiva.
+
+\begin{table}[H]
+	\centering
+	\caption{Cotas \emph{roofline} (Ecuación~\ref{eq:roofline}) por backend y modelo
+	de tráfico $q$.}
+	\label{tab:cotas}
+	\begin{tabular}{@{}llll@{}}
+		\toprule
+		\textbf{Backend} & \textbf{$B$} & \textbf{$q$ (B/celda)} & \textbf{$P_{\max}$} \\
+		\midrule
+		GPU (reúso ideal) & 288 GB/s    & 2  & 144 Gcélulas/s \\
+		GPU (sin reúso)   & 288 GB/s    & 10 & 28{,}8 Gcélulas/s \\
+		CPU (techo DRAM)  & 42{,}7 GB/s & 2  & 21{,}3 Gcélulas/s \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+Esto explica de antemano por qué la \textbf{memoria compartida no puede ayudar} aquí.
+Su único beneficio sería bajar $q$ de $\sim$10 hacia $\sim$2 reutilizando el halo;
+pero la caché L2 de la GPU ($1{,}5$~MiB) ya sirve buena parte de esas lecturas, y la
+variante con memoria compartida agrega \texttt{\_\_syncthreads()} y el costo de
+cargar el halo byte a byte. El \emph{stencil} de 1 byte es demasiado liviano para
+amortizar ese costo: la cota efectiva no sube y, en la práctica, el kernel compartido
+queda \emph{por debajo} del global (Sección~\ref{sec:res-opciones}).
+
+\subsection{Cota de la CPU: memoria contra cómputo}
+\label{sec:cota-cpu}
+
+La DRAM del equipo (DDR4-2666 en doble canal) entrega
+%
+\begin{equation}
+	B_{\text{CPU}} = 2666\ \tfrac{\text{MT}}{\text{s}} \times 8\ \text{B} \times 2\
+	\text{canales} \approx 42{,}7\ \text{GB/s},
+	\label{eq:bw-cpu}
+\end{equation}
+%
+que con $q = 2$ daría una cota de $21{,}3$~Gcélulas/s. Sin embargo, \textbf{esa cota
+no es la que limita a la CPU}, y la razón está en las cachés. El barrido procede fila
+por fila, y una fila solo necesita tres filas del buffer de entrada (la anterior, la
+actual y la siguiente). Para una grilla de $8192$ columnas eso son
+%
+\[
+	3 \times 8192 \times 1\ \text{byte} = 24\ \text{KiB} < 32\ \text{KiB (L1d)},
+\]
+%
+de modo que las tres filas caben en la caché L1 de datos de cada núcleo: tras la
+primera fila, las lecturas del vecindario se sirven desde L1 y la DRAM casi no se
+toca. La CPU no está limitada por ancho de banda sino por \emph{cómputo}: cuántas
+instrucciones (cálculo de índices, ocho lecturas, sumas, el salto de la regla) puede
+retirar cada núcleo por ciclo.
+
+La medición lo confirma: la versión de 12 hilos alcanza $\approx 0{,}14$~Gcélulas/s,
+apenas el $0{,}7\%$ del techo de DRAM. Repartido entre 12 hilos son
+$\sim$12~Mcélulas/s por hilo; a un reloj sostenido de $\sim$3{,}5~GHz eso son unos
+\textbf{300 ciclos por celda}, coherente con un \emph{kernel} escalar, con un salto
+por celda y verificación de bordes, sin vectorizar. La consecuencia para el informe
+es clara: el techo realista de la CPU \emph{tal como está implementada} es del orden
+de $0{,}14$~Gcélulas/s, no los $21$ del límite de memoria; solo una reescritura
+vectorizada (AVX2) y sin saltos se acercaría a ese límite.
+
+\subsection{Transferencias PCIe y el \emph{ping-pong} en el \emph{device}}
+\label{sec:cota-pcie}
+
+El enlace PCIe Gen3 $\times$16 ofrece $\approx 15{,}8$~GB/s teóricos
+($\sim$12~GB/s efectivos). La métrica de esta tarea no lo incluye ---se cronometra
+solo el kernel y se mide con el \texttt{NullRenderer}---, pero su cota justifica una
+decisión de diseño. Si se copiara la grilla entre \emph{host} y \emph{device} en cada
+generación (1 byte/celda, un sentido), el techo sería $\sim$12~Gcélulas/s, por debajo
+de los $\sim$28 que el kernel sostiene; copiar en ambos sentidos lo bajaría a
+$\sim$6. Por eso los motores de GPU mantienen los dos buffers en el \emph{device} y
+hacen ahí el \emph{ping-pong} (Sección~\ref{sec:impl-cuda}): el bus PCIe se cruza solo
+una vez al subir la semilla y otra al bajar el resultado, nunca dentro del bucle de
+medición. (En reposo el enlace negocia Gen1 para ahorrar energía; sube a Gen3 bajo
+carga.)
+
+\subsection{Cota del \emph{speed-up}}
+\label{sec:cota-speedup}
+
+Si \emph{ambos} backends estuvieran limitados por memoria con el mismo $q$, el
+\emph{speed-up} máximo sería exactamente el cociente de anchos de banda:
+%
+\begin{equation}
+	S_{\max} = \frac{B_{\text{GPU}}}{B_{\text{CPU}}} = \frac{288}{42{,}7} \approx 6{,}8.
+	\label{eq:smax}
+\end{equation}
+%
+Este es el \emph{speed-up} ``justo'' que predice el hardware. El valor medido (GPU
+contra 12 hilos) será mucho mayor ---del orden de $200\times$--- precisamente porque
+la CPU \textbf{no} está en su techo de memoria: opera a $\sim$1/150 de él
+(Sección~\ref{sec:cota-cpu}). Es decir, un \emph{speed-up} de $\sim$200$\times$ no
+mide una ventaja de hardware de $200\times$, sino la suma de dos efectos: la GPU
+trabajando cerca de su techo de banda y una CPU base escalar trabajando muy por
+debajo del suyo. El informe reporta ambos números: $\sim$6{,}8$\times$ es la
+comparación de hardware ``limpia'', mientras que $\sim$200$\times$ es el
+\emph{speed-up} de ingeniería contra la implementación secuencial de referencia.
+
+\subsection{Validación preliminar del modelo}
+\label{sec:cota-validacion}
+
+La Tabla~\ref{tab:validacion} adelanta el contraste entre cota y medición (los
+barridos completos están en la Sección~\ref{sec:resultados}). Dos hechos confirman el
+modelo: el kernel global alcanza el $97\%$ de su techo \emph{roofline} ---está
+genuinamente limitado por la banda de GDDR6--- y la CPU se queda en el $0{,}7\%$ del
+suyo ---está limitada por cómputo, no por memoria---.
+
+\begin{table}[H]
+	\centering
+	\caption{Cota \emph{roofline} contra medición preliminar (grillas grandes, mejor
+	configuración). $1$~Gcélula/s $=10^{3}$~Mcélulas/s.}
+	\label{tab:validacion}
+	\begin{tabular}{@{}llll@{}}
+		\toprule
+		\textbf{Backend / config.} & \textbf{Cota} & \textbf{Medido} & \textbf{\% cota} \\
+		\midrule
+		GPU global ($q=10$)         & 28{,}8 Gcél/s & $\approx 28{,}0$ Gcél/s & 97\% \\
+		GPU (reúso ideal, $q=2$)    & 144 Gcél/s    & no alcanzable con 1 B/celda & --- \\
+		CPU, 12 hilos (techo DRAM)  & 21{,}3 Gcél/s & $\approx 0{,}14$ Gcél/s & 0{,}7\% \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+En suma, el \textbf{máximo obtenible} en este proyecto queda bien delimitado: la GPU
+toca su techo en $\approx 28$--$30$~Gcélulas/s con la disposición de 1 byte por
+celda, y superarlo exigiría reducir $q$ (por ejemplo, empaquetar las celdas en bits,
+fuera del alcance de esta tarea). La CPU, tal como está implementada, ronda
+$0{,}14$~Gcélulas/s, dominada por el costo por celda y no por la memoria. El
+\emph{speed-up} de hardware ``limpio'' es $\sim$6{,}8$\times$; el medido contra la
+referencia secuencial es mucho mayor por la diferencia de madurez entre ambas
+implementaciones.
 
 \section{Resultados}
 \label{sec:resultados}
