@@ -34,12 +34,18 @@ target_link_libraries(gol_cpu PUBLIC gol_core Threads::Threads)
 # ----------------------------------------------------------------------------
 # Renderers (NullRenderer is header-only; TextRenderer has a body).
 # ----------------------------------------------------------------------------
-add_library(gol_render
-    src/render/TextRenderer.cpp
-    src/render/AnsiRenderer.cpp
+set(GOL_RENDER_SOURCES
+        src/render/TextRenderer.cpp
 )
-target_link_libraries(gol_render PUBLIC gol_core)
 
+if(NOT WIN32)
+    list(APPEND GOL_RENDER_SOURCES
+            src/render/AnsiRenderer.cpp
+    )
+endif()
+
+add_library(gol_render ${GOL_RENDER_SOURCES})
+target_link_libraries(gol_render PUBLIC gol_core)
 # ----------------------------------------------------------------------------
 # Application: owns the loop and wires a chosen engine + renderer (CPU + null/text
 # today). Builds and runs with no CUDA toolkit and no OpenCL present.
@@ -52,7 +58,8 @@ target_link_libraries(gol PRIVATE gol_core gol_cpu gol_render)
 # ----------------------------------------------------------------------------
 option(BUILD_CUDA "Build the CUDA engine" OFF)
 if(BUILD_CUDA)
-    set(_cuda_src ${CMAKE_CURRENT_SOURCE_DIR}/src/engines/cuda/CudaEngine.cu)
+    set(_cuda_src ${CMAKE_CURRENT_SOURCE_DIR}/src/engines/cuda/CudaEngine.cu
+            include/gol/engines/OpenCLEngine.hpp)
     if(EXISTS ${_cuda_src})
         enable_language(CUDA)
         add_library(gol_cuda
@@ -90,11 +97,17 @@ if(BUILD_OPENCL)
     set(_opencl_src ${CMAKE_CURRENT_SOURCE_DIR}/src/engines/opencl/OpenCLEngine.cpp)
     if(EXISTS ${_opencl_src})
         find_package(OpenCL REQUIRED)
+
         add_library(gol_opencl ${_opencl_src})
         target_link_libraries(gol_opencl PUBLIC gol_core OpenCL::OpenCL)
+
+        target_link_libraries(gol PRIVATE gol_opencl)
+        target_compile_definitions(gol PRIVATE GOL_HAVE_OPENCL)
+
+        set(GOL_OPENCL_ENABLED ON)
     else()
         message(WARNING "BUILD_OPENCL=ON but ${_opencl_src} does not exist yet; "
-                        "skipping the OpenCL engine.")
+                "skipping the OpenCL engine.")
     endif()
 endif()
 

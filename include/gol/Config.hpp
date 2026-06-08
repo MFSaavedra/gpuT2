@@ -76,6 +76,9 @@ struct Config {
 
   bool csv = false;       ///< Emit one CSV data row instead of the human-readable summary.
   bool csvHeader = false; ///< Print the CSV header line and exit (for sweep scripts).
+  bool profile = false; ///< Print host-side profiling breakdown.
+  bool verify = false; ///< Compare selected backend against sequential CPU.
+
 };
 
 /**
