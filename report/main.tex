@@ -74,7 +74,10 @@
 	implementados y verificados los motores de CPU y CUDA; este último se compara
 	bit a bit contra la CPU como oráculo. Se comparan dos variaciones de
 	configuración del kernel (tamaño de bloque y uso de memoria compartida) y se
-	analiza a partir de qué tamaño de cuadrícula $N \times M$ conviene usar la GPU.
+	analiza a partir de qué tamaño de cuadrícula $N \times M$ conviene usar la GPU. La
+	GPU alcanza hasta $\approx 200\times$ sobre la mejor CPU paralela, limitada por el
+	ancho de banda de GDDR6; la memoria compartida resulta contraproducente para este
+	\emph{stencil} de 1 byte.
 \end{abstractd}
 
 % TABLA DE CONTENIDOS - ÍNDICE
@@ -589,36 +592,37 @@ debajo del suyo. El informe reporta ambos números: $\sim$6{,}8$\times$ es la
 comparación de hardware ``limpia'', mientras que $\sim$200$\times$ es el
 \emph{speed-up} de ingeniería contra la implementación secuencial de referencia.
 
-\subsection{Validación preliminar del modelo}
+\subsection{Validación del modelo}
 \label{sec:cota-validacion}
 
-La Tabla~\ref{tab:validacion} adelanta el contraste entre cota y medición (los
-barridos completos están en la Sección~\ref{sec:resultados}). Dos hechos confirman el
-modelo: el kernel global alcanza el $97\%$ de su techo \emph{roofline} ---está
-genuinamente limitado por la banda de GDDR6--- y la CPU se queda en el $0{,}7\%$ del
-suyo ---está limitada por cómputo, no por memoria---.
+La Tabla~\ref{tab:validacion} contrasta las cotas con la medición de los barridos
+(Sección~\ref{sec:resultados}). Dos hechos confirman el modelo: el kernel global
+\textbf{opera al borde del techo de GDDR6} ---su tráfico efectivo es de $\approx 9$
+bytes/celda en $N=2048$ (mejor reúso en L2) y sube a $\approx 11$--$12$ en las grillas
+grandes--- y la CPU se queda en \textbf{menos del $1\%$} de su techo de DRAM, limitada
+por cómputo y no por memoria.
 
 \begin{table}[H]
 	\centering
-	\caption{Cota \emph{roofline} contra medición preliminar (grillas grandes, mejor
-	configuración). $1$~Gcélula/s $=10^{3}$~Mcélulas/s.}
+	\caption{Cota \emph{roofline} contra medición (mejor configuración). $1$~Gcélula/s
+	$=10^{3}$~Mcélulas/s.}
 	\label{tab:validacion}
 	\begin{tabular}{@{}llll@{}}
 		\toprule
 		\textbf{Backend / config.} & \textbf{Cota} & \textbf{Medido} & \textbf{\% cota} \\
 		\midrule
-		GPU global ($q=10$)         & 28{,}8 Gcél/s & $\approx 28{,}0$ Gcél/s & 97\% \\
-		GPU (reúso ideal, $q=2$)    & 144 Gcél/s    & no alcanzable con 1 B/celda & --- \\
-		CPU, 12 hilos (techo DRAM)  & 21{,}3 Gcél/s & $\approx 0{,}14$ Gcél/s & 0{,}7\% \\
+		GPU global (sin reúso, $q=10$) & 28{,}8 Gcél/s & 25--32 Gcél/s (máx $32{,}1$) & $\sim$100\% \\
+		GPU (reúso ideal, $q=2$)       & 144 Gcél/s    & no alcanzable con 1 B/celda  & --- \\
+		CPU, 12 hilos (techo DRAM)     & 21{,}3 Gcél/s & $\approx 0{,}16$ Gcél/s      & 0{,}8\% \\
 		\bottomrule
 	\end{tabular}
 \end{table}
 
 En suma, el \textbf{máximo obtenible} en este proyecto queda bien delimitado: la GPU
-toca su techo en $\approx 28$--$30$~Gcélulas/s con la disposición de 1 byte por
+toca su techo en $\approx 25$--$32$~Gcélulas/s con la disposición de 1 byte por
 celda, y superarlo exigiría reducir $q$ (por ejemplo, empaquetar las celdas en bits,
 fuera del alcance de esta tarea). La CPU, tal como está implementada, ronda
-$0{,}14$~Gcélulas/s, dominada por el costo por celda y no por la memoria. El
+$0{,}16$~Gcélulas/s, dominada por el costo por celda y no por la memoria. El
 \emph{speed-up} de hardware ``limpio'' es $\sim$6{,}8$\times$; el medido contra la
 referencia secuencial es mucho mayor por la diferencia de madurez entre ambas
 implementaciones.
@@ -630,30 +634,113 @@ implementaciones.
 \label{sec:experimentos}
 
 Las mediciones se realizan en un equipo con procesador Intel Core i7-9750H
-(6~núcleos físicos / 12 hilos, caché L2 de 1{,}5~MiB y L3 de 12~MiB) y GPU NVIDIA
-GeForce GTX~1660~Ti (Turing, capacidad de cómputo $7.5$), bajo Linux, con CUDA y
-compilación en C\texttt{++}23. El motor de CPU se mide con $1$ hilo (\emph{baseline}
-secuencial) y con todos los hilos disponibles; el de CUDA con los cuatro tamaños
-de bloque y con/sin memoria compartida.
+(6~núcleos físicos / 12 hilos; L1d de 32~KiB por núcleo, L2 de 1{,}5~MiB y L3 de
+12~MiB) y GPU NVIDIA GeForce GTX~1660~Ti (Turing, capacidad de cómputo $7{.}5$;
+GDDR6 de 192 bits, $288$~GB/s), bajo Linux con CUDA y compilación en C\texttt{++}23.
 
-Se mide el número de células evaluadas por segundo (Ecuación~\ref{eq:metrica})
-para grillas cuadradas $N \in \{128, 256, 512, 1024, 2048, 4096\}$, con un número
-fijo de generaciones por configuración y promediando varias corridas
-independientes (tomando el mejor tiempo para reducir el ruido de \emph{turbo} y
-contención). Todas las mediciones usan el \texttt{NullRenderer}.
+Los barridos se automatizan con \texttt{scripts/sweep.sh}, que invoca el binario en
+modo CSV y produce dos archivos en \texttt{results/}: uno para el barrido de
+optimizaciones de CUDA (bloque $\times$ memoria compartida) y otro para el
+escalamiento CPU/GPU según el tamaño de grilla; el análisis y las figuras se generan
+con el cuaderno \texttt{analysis/results.ipynb}. Cada configuración se ejecuta varias
+veces y se conserva el \textbf{mejor} tiempo (menor ruido de \emph{turbo} y
+contención); todas las corridas usan el \texttt{NullRenderer} (sin dibujado ni
+transferencias en el lazo cronometrado), bordes acotados y la misma semilla.
+
+Se miden grillas cuadradas $N \in \{64, 128, 256, 512, 1024, 2048, 4096, 8192,
+16384\}$. El número de generaciones se escala con $N$ (muchas para grillas pequeñas,
+pocas para las grandes) de modo que cada corrida sea medible pero acotada. El motor
+de CPU se barre en $\{1,2,4,6,8,10,12\}$ hilos (1 = secuencial) y el de CUDA en
+bloques $\{32,64,128,256,512\}$ con y sin memoria compartida. Antes de los barridos
+se verificó que la GPU operara a plena velocidad (límite de potencia de 60~W, reloj
+de memoria 6001~MHz): un \emph{cap} de potencia rebajaría el ancho de banda efectivo
+e invalidaría la comparación.
 
 \subsection{CPU vs GPU por tamaño de cuadrícula}
 \label{sec:res-cpu-gpu}
 
-\textit{Pendiente: ejecutar el barrido y presentar aquí la tabla y los gráficos
-de Mcélulas/s en función de $N$ para CPU (1 hilo y multi-hilo) y CUDA (mejor
-configuración).}
+La Figura~\ref{fig:cpuvsgpu} compara, en ejes log--log, los tres caminos según el
+tamaño de grilla. La CPU secuencial es prácticamente \textbf{plana} en $\approx
+27$~Mcélulas/s: como se anticipó en la Sección~\ref{sec:cota-cpu}, está limitada por
+cómputo, no por memoria. La CPU paralela se estabiliza en $\approx 150$--$160$, y la
+GPU domina por \textbf{dos a tres órdenes de magnitud}, con su máximo ($\approx
+32$~Gcélulas/s) en $N=2048$; más allá decae levemente al exceder la grilla la caché
+L2 y bajar la reutilización. La curva \texttt{CUDA (wall)} incluye el costo de
+lanzamiento por paso: se separa del \texttt{kernel} en grillas pequeñas (la GPU queda
+infrautilizada) y se le junta para $N \gtrsim 2048$.
+
+\insertimage{bench_cpu_vs_gpu}{width=0.86\linewidth}{Rendimiento (Mcélulas/s, ejes
+log--log) según el tamaño de grilla $N$, mejor de las repeticiones. \label{fig:cpuvsgpu}}
+
+\begin{table}[H]
+	\centering
+	\caption{Rendimiento por backend y \emph{speed-up} de la GPU frente a la mejor CPU
+	paralela (mejor de las repeticiones). En $N{=}16384$ la CPU secuencial se omitió
+	por costo (su rendimiento es plano, $\approx 26$~Mcélulas/s).}
+	\label{tab:cpugpu}
+	\begin{tabular}{@{}rrrrr@{}}
+		\toprule
+		$N$ & CPU sec. [Mcél/s] & CPU par. [Mcél/s] & CUDA [Gcél/s] & $S$ (vs par.) \\
+		\midrule
+		256   & 29  & 160 & 12{,}3 & 77  \\
+		1024  & 28  & 160 & 29{,}2 & 183 \\
+		2048  & 27  & 159 & 32{,}1 & 202 \\
+		4096  & 27  & 149 & 30{,}1 & 202 \\
+		8192  & 26  & 154 & 25{,}9 & 168 \\
+		16384 & --- & 159 & 24{,}8 & 157 \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\paragraph{Escalamiento en CPU.} La Figura~\ref{fig:cputhreads} muestra el
+rendimiento de la CPU según el número de hilos. El reparto por bandas de filas escala
+\textbf{casi linealmente hasta los 6 núcleos físicos} ($\approx 5{,}4\times$ con 6
+hilos); el \emph{hyperthreading} aporta poco ($12$ hilos $\approx 5{,}9\times$),
+coherente con un problema limitado por cómputo. El detalle notable es la \textbf{caída
+no monótona en 8 y 10 hilos}: con 8 hilos, 2 de los 6 núcleos ejecutan 2 hilos HT
+(cada uno $\sim 0{,}65\times$) y 4 ejecutan 1; como la \texttt{std::barrier} sincroniza
+cada generación, el paso espera al hilo más lento y los núcleos con HT se vuelven el
+cuello de botella. Con 12 hilos todos quedan igualmente cargados y el rendimiento se
+recupera. (No es térmico: el calentamiento haría caer también a 10 y 12 hilos.)
+
+\insertimage{bench_cpu_threads}{width=0.82\linewidth}{Rendimiento de la CPU
+(Mcélulas/s) según el número de hilos; la recta punteada es el escalamiento lineal
+ideal. \label{fig:cputhreads}}
 
 \subsection{Resultados de las opciones elegidas}
 \label{sec:res-opciones}
 
-\textit{Pendiente: curvas de Mcélulas/s por tamaño de bloque $\{32,64,128,256\}$ y
-comparación con/sin memoria compartida, para los $N$ grandes.}
+La Figura~\ref{fig:blockshared} reúne las dos optimizaciones. La curva por
+\textbf{tamaño de bloque} es cóncava: con 32 hilos hay muy pocos \emph{warps} por SM
+para ocultar la latencia de memoria, y con 512 la ocupación cae; el óptimo está en
+\textbf{64--128} hilos. La \textbf{memoria compartida} (líneas discontinuas) queda
+\emph{sistemáticamente por debajo} de la versión global ---en torno a $0{,}55\times$
+su rendimiento--- confirmando la predicción del modelo (Sección~\ref{sec:cota-gpu}):
+para un \emph{stencil} de 1 byte la caché L2 ya sirve la reutilización, y la barrera,
+el halo y los accesos byte-a-byte a la SRAM cuestan más de lo que ahorran. La
+Tabla~\ref{tab:opt} resume el mejor bloque por $N$.
+
+\insertimage{bench_block_shared}{width=0.86\linewidth}{CUDA: rendimiento (Gcélulas/s)
+por tamaño de bloque, memoria global (sólido) frente a compartida (discontinuo), para
+varias grillas. \label{fig:blockshared}}
+
+\begin{table}[H]
+	\centering
+	\caption{Mejor configuración global frente a compartida (Gcélulas/s; el mejor
+	tamaño de bloque se indica entre paréntesis).}
+	\label{tab:opt}
+	\begin{tabular}{@{}rccc@{}}
+		\toprule
+		$N$ & global (mejor blq.) & compartida (mejor blq.) & global/compartida \\
+		\midrule
+		1024  & 31{,}7 (64/128) & 17{,}9 (128) & 1{,}77 \\
+		2048  & 34{,}9 (128)    & 18{,}9 (128) & 1{,}85 \\
+		4096  & 29{,}8 (128)    & 15{,}2 (256) & 1{,}96 \\
+		8192  & 26{,}2 (64)     & 13{,}6 (128) & 1{,}93 \\
+		16384 & 24{,}8 (128)    & 13{,}5 (128) & 1{,}84 \\
+		\bottomrule
+	\end{tabular}
+\end{table}
 
 \section{Análisis de resultados}
 \label{sec:analisis}
@@ -661,14 +748,39 @@ comparación con/sin memoria compartida, para los $N$ grandes.}
 \subsection{Speed-up}
 \label{sec:speedup}
 
-\textit{Pendiente: reportar $S(N)$ (Ecuación~\ref{eq:speedup}) por configuración a
-partir de los datos de la Sección~\ref{sec:resultados}.}
+El \emph{speed-up} (Ecuación~\ref{eq:speedup}, panel izquierdo de la
+Figura~\ref{fig:speedup}) alcanza $\approx 1200\times$ frente a la versión secuencial
+y $\approx 200\times$ frente a la mejor CPU paralela, con su máximo en
+$N=2048$--$4096$. Conviene leer ambos números junto con la cota de la
+Sección~\ref{sec:cota-speedup}: el cociente ``limpio'' de anchos de banda predice
+$\approx 6{,}8\times$, y el $\sim 200\times$ medido es mucho mayor porque la CPU base
+no está en su techo de memoria (opera a $\sim 1/150$ de él), no porque el hardware de
+la GPU sea $200\times$ superior. El $\sim 200\times$ mezcla, entonces, la ventaja real
+de ancho de banda de la GPU con la inmadurez de la CPU escalar de referencia.
+
+\insertimage{bench_speedup}{width=\linewidth}{Izquierda: \emph{speed-up} de la GPU
+frente a la CPU secuencial y a la mejor paralela. Derecha: eficiencia
+\texttt{wall/kernel} (peso del \emph{overhead} de lanzamiento); la banda señala la
+rodilla $N\approx 1024$--$2048$. \label{fig:speedup}}
 
 \subsection{Umbral de conveniencia GPU}
 \label{sec:umbral}
 
-\textit{Pendiente: identificar el tamaño de grilla a partir del cual $S(N) > 1$ de
-manera sostenida, considerando el costo de transferencia en grillas pequeñas.}
+El panel derecho de la Figura~\ref{fig:speedup} muestra la eficiencia
+\texttt{wall/kernel}, que mide el peso del \emph{overhead} de lanzamiento por paso:
+sube de $\approx 40\%$ en $N=64$ a $\approx 98\%$ en $N \gtrsim 2048$, de modo que la
+\textbf{rodilla} de conveniencia está en $N \approx 1024$--$2048$. Por debajo, la GPU
+está infrautilizada (pocos bloques para llenar los 24 SM) y el lanzamiento domina; por
+encima, el kernel satura el bus.
+
+Cabe una precisión sobre el umbral clásico ``a partir de qué $N$ conviene la GPU''.
+Con esta metodología ---cronometraje de kernel/lazo con \texttt{NullRenderer}, que
+\emph{excluye} las transferencias--- la GPU supera a la CPU en \emph{todo} el rango
+medido, incluso en $N=64$: su único costo es el lanzamiento y la CPU base es débil. Un
+umbral por debajo del cual convenga la CPU solo aparece al contabilizar el costo PCIe
+de subir/bajar la grilla (Sección~\ref{sec:cota-pcie}): transferir la grilla en cada
+generación acotaría la GPU a $\sim 12$~Gcélulas/s, y para grillas muy pequeñas el costo
+fijo de transferencia la haría perder frente a la CPU.
 
 \subsection{Perfilamiento (Nsight / Chrono)}
 \label{sec:profiling}
@@ -681,9 +793,32 @@ con \texttt{std::chrono}.}
 \section{Conclusiones}
 \label{sec:conclusiones}
 
-\textit{Pendiente: resumir los principales hallazgos (speed-up alcanzado, umbral
-de conveniencia, efecto de las dos variaciones de configuración) y las
-limitaciones encontradas.}
+Se implementaron y compararon tres caminos del Juego de la Vida con la regla variante
+\texttt{B36/S23}: CPU secuencial, CPU paralela y CUDA (OpenCL queda pendiente). Los
+hallazgos principales:
+
+\begin{itemize}
+	\item \textbf{Memoria compartida contraproducente.} Para un \emph{stencil} de 1
+	      byte, la versión con memoria compartida rinde $\approx 0{,}55\times$ la
+	      global: la caché L2 ya captura la reutilización y la barrera/halo no se
+	      amortizan. Esto valida el análisis \emph{roofline}.
+	\item \textbf{Tamaño de bloque.} Óptimo en 64--128 hilos, con curva cóncava por
+	      ocupación.
+	\item \textbf{CPU.} Escala hasta los 6 núcleos físicos ($\approx 5{,}4\times$); el
+	      \emph{hyperthreading} aporta poco y, por la sincronización con barrera,
+	      desbalancea en 8 y 10 hilos.
+	\item \textbf{GPU.} $\approx 32$~Gcélulas/s, limitada por el ancho de banda de
+	      GDDR6 ($288$~GB/s); el kernel global opera al borde de ese techo.
+	\item \textbf{Speed-up.} Hasta $\approx 200\times$ sobre la mejor CPU paralela y
+	      $\approx 1200\times$ sobre la secuencial; la cota ``limpia'' de hardware es
+	      $\approx 6{,}8\times$, y la diferencia se explica por una CPU base no
+	      vectorizada.
+\end{itemize}
+
+\textbf{Limitaciones y trabajo futuro.} Falta el backend OpenCL y el perfilamiento con
+Nsight (Sección~\ref{sec:profiling}); la disposición de 1 byte por celda fija el techo
+de la GPU (empaquetar bits lo elevaría) y la CPU se beneficiaría de una reescritura
+vectorizada (AVX2) sin saltos.
 
 % FIN DEL DOCUMENTO
 \end{document}

@@ -234,6 +234,8 @@ and impose no link dependency.
 		\texttt{src/render/AnsiRenderer.cpp}     & In-place ANSI animation & \ref{sec:render} \\
 		\texttt{CMakeLists.txt}                  & Build, GPU opt-in gating & \ref{sec:cmake} \\
 		\texttt{tests/*.cpp}                     & Executable spec of the invariants & \ref{sec:tests} \\
+		\texttt{scripts/sweep.sh}                & Benchmark sweeps $\to$ \texttt{results/*.csv} & \ref{sec:timing} \\
+		\texttt{analysis/results.ipynb}          & Plots the sweeps (Spanish) & \ref{sec:timing} \\
 		\bottomrule
 	\end{tabular}
 \end{table}
@@ -1306,7 +1308,10 @@ For the sweep data the binary has a CSV mode: \texttt{--csv} prints one data row
 (columns \texttt{backend, rows, cols, generations, threads, block, shared, wrap,
 kernel\_ms, wall\_ms, mcells\_kernel, mcells\_wall}) and \texttt{--csv-header}
 prints just the header and exits, so a script writes the header once and appends
-a row per configuration straight into Pandas. The speed-up is
+a row per configuration straight into Pandas. In practice that script is
+\texttt{scripts/sweep.sh} (the CPU-threads and CUDA block\,$\times$\,shared sweeps,
+with an adaptive-repeats runtime guard), and \texttt{analysis/results.ipynb} turns
+the resulting \texttt{results/*.csv} into the report's figures. The speed-up is
 
 \begin{equation}
 	S(N) = \frac{T_{\text{CPU}}(N)}{T_{\text{GPU}}(N)}.
@@ -1331,11 +1336,14 @@ already lives in L1/L2; the explicit staging adds index arithmetic and a barrier
 without saving meaningful DRAM traffic, and can lose. Explaining \emph{why} this
 optimisation underperforms is one of the more interesting parts of the report.
 
-\paragraph{No optimisation helps at small grids.} Kernel-launch and transfer
-overhead dominate when there are few cells, so $S(N) < 1$ for small $N$ and the
-CPU is competitive or faster. The sweeps must therefore run at large $N\times M$
-to see the GPU win. Identifying the threshold $N$ where $S(N) > 1$ sustainably is
-a graded deliverable.
+\paragraph{Launch overhead dominates at small grids.} With few cells there are too
+few blocks to fill the SMs, so per-step launch cost dominates: the GPU's
+\texttt{wall}/\texttt{kernel} efficiency falls (to $\approx 40\%$ at $N=64$),
+recovering by $N\approx 1024$--$2048$. Because the metric times the kernel/loop with
+the \texttt{NullRenderer} (transfers excluded), the GPU still outruns the
+compute-bound CPU at every measured $N$; a classic $S(N) < 1$ regime appears only
+once the PCIe transfer cost is counted. The sweeps therefore run from small to large
+$N\times M$ to expose both the efficiency knee and the asymptote.
 
 The deep-dive profiling targets the \emph{best} parallel solution only:
 \texttt{ncu} (Nsight Compute) for CUDA kernel-internal metrics --- occupancy,

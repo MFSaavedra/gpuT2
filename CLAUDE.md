@@ -47,6 +47,13 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   across block sizes, shared/global, and both edge modes (`cuda_equivalence_test.cpp`). Opt-in via
   `-DBUILD_CUDA=ON`; targets `sm_75` (GTX 1660 Ti) with `-lineinfo` for `ncu`.
 
+- **Benchmarks** — run. `scripts/sweep.sh` drives the CPU(threads) + CUDA(block×shared) sweeps to
+  `results/sweep_*.csv`; `analysis/results.ipynb` (Spanish) plots them to `report/img/bench_*.png`.
+  Headline: CUDA peaks ~32 Gcells/s (GDDR6-bound), ~200× over the best parallel CPU; **shared memory is
+  slower** (~0.55×) and block 64–128 is optimal — both as the roofline predicted. The report's
+  Resultados/Análisis and theoretical-ceilings sections are filled from this data. `ncu`/`nsys`
+  profiling of the best kernel is the remaining deep-dive.
+
 Still greenfield: OpenCL (`OpenCLEngine`) — no device source yet, so `--engine opencl` errors (and is
 omitted from a build without `-DBUILD_OPENCL=ON`). GPU CMake targets are opt-in and double-gated (the
 option **and** the source must exist). `CpuEngine` is the reference oracle every GPU backend is checked
@@ -136,7 +143,9 @@ src/render/    TextRenderer.cpp AnsiRenderer.cpp           (NullRenderer is head
 src/patterns/  Pattern.cpp RleLoader.cpp
 tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp
 patterns/      *.rle                                       (block, blinker, birth_on_six, highlife_replicator, highlife_spaceship)
-               (analysis/ *.ipynb results/*.csv — later)
+scripts/       sweep.sh                                    (CPU+CUDA benchmark sweeps -> results/*.csv)
+results/       sweep_cuda_opt.csv sweep_scaling.csv         (Pandas-ready sweep data)
+analysis/      results.ipynb                               (loads results/, writes report/img/bench_*.png)
 ```
 
 Per the report plan (`report/main.tex`), the two kernel-config variations to benchmark are block sizes
