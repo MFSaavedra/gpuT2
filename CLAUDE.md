@@ -177,11 +177,11 @@ Deep-dive on the *best* parallel solution only:
   CUDA/OptiX only; it will **not** profile OpenCL.
 - **Nsight Systems (`nsys`)** — system/timeline view; can also trace OpenCL on NVIDIA hardware.
 
-Analysis to keep in mind: this is a memory-bound, arithmetically trivial 9-point stencil over 1-byte
-cells. Block size should give a concave curve plateauing by ~128-256; shared memory may give little or
-even negative gain because the 1-byte stencil already lives in cache — the *why* is the interesting
-part of the report. None of the optimizations help at small grids (launch/transfer overhead dominates),
-so run the sweeps at large N x M.
+Analysis (now measured + profiled): this is a memory-bound, arithmetically trivial 9-point stencil over
+1-byte cells. Measured: block size is concave, peaking at **64-128**; shared memory **hurts** (~0.55x)
+because L2 already serves the reuse. `ncu` refined the picture — the global kernel is **not**
+DRAM-bandwidth-bound (DRAM at ~20%, q≈2 B/cell via 88% L2 hit) but **latency / L2-pipe-bound** (~65% SOL).
+Launch/transfer overhead dominates only at small grids, so run the sweeps at large N x M.
 
 ## Tests
 

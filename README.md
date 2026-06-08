@@ -13,8 +13,15 @@ rule **HighLife** (`B36/S23`), and it must hold identically in every backend.
 * **CPU engine** — implemented. One code path serves both the sequential
   baseline (1 core) and the data-parallel mode (N cores); they produce
   bit-for-bit identical results.
-* **CUDA / OpenCL engines** — planned. The CLI flags and CMake targets exist,
-  but the device sources do not yet, so `--engine cuda|opencl` currently errors.
+* **CUDA engine** — implemented. One thread per cell with device-side
+  ping-pong and two runtime-selectable kernels (plain global memory and a
+  shared-memory tiled variant), verified bit-for-bit against the CPU oracle.
+  Opt in with `-DBUILD_CUDA=ON`.
+* **OpenCL engine** — planned. The CLI flag and CMake target exist, but the
+  device source does not yet, so `--engine opencl` currently errors.
+
+The CPU-vs-CUDA benchmark sweeps and the Nsight (`ncu`/`nsys`) profiling are
+done; see **Benchmarking** and **Report** below.
 
 ## Requirements
 
@@ -32,7 +39,7 @@ cmake -S . -B build
 cmake --build build
 ```
 
-To opt in to GPU targets (once their sources exist):
+To opt in to GPU targets (CUDA works today; OpenCL is planned):
 
 ```bash
 cmake -S . -B build -DBUILD_CUDA=ON -DBUILD_OPENCL=ON
@@ -54,9 +61,10 @@ cmake --build build
 | `--wrap` | off | toroidal edges (default: bounded, out-of-range neighbours count as dead) |
 | `--seed N` | 1 | RNG seed for the random fill |
 | `--rle PATH` | — | seed from an RLE pattern (centred) instead of a random fill |
-| `--renderer null\|text` | null | `null` for benchmarking, `text` for an ASCII dump per generation |
-| `--engine cpu\|cuda\|opencl` | cpu | simulation backend (only `cpu` works today) |
-| `--block N`, `--shared` | 256, off | GPU kernel knobs, swept in the report (ignored by the CPU engine) |
+| `--renderer null\|text\|ansi` | null | `null` for benchmarking, `text` for a scrolling ASCII dump, `ansi` for an in-place animation (interactive on a TTY) |
+| `--engine cpu\|cuda\|opencl` | cpu | simulation backend (`cpu` and `cuda` work; `opencl` is planned) |
+| `--block N`, `--shared` | 256, off | GPU kernel knobs (block size and shared-memory tiling), swept in the report (ignored by the CPU engine) |
+| `--csv`, `--csv-header` | — | emit one CSV data row / the header line, for benchmark sweep scripts |
 
 The headline metric is **cells evaluated per second** = `rows * cols * gens /
 time`. Always benchmark against the `null` renderer so output cost never
@@ -69,6 +77,17 @@ pollutes the number; the binary reports both kernel and wall throughput.
 
 # Watch a pattern evolve (generation 0 is the seed itself)
 ./build/gol -r 22 -c 22 -g 12 --rle patterns/highlife_replicator.rle --renderer text
+```
+
+## Benchmarking
+
+For parameter sweeps the binary has a CSV mode (`--csv` / `--csv-header`).
+`scripts/sweep.sh` drives the CPU-thread and CUDA block/shared sweeps into
+`results/*.csv`, and `analysis/results.ipynb` turns them into the report's
+figures:
+
+```bash
+./scripts/sweep.sh        # -> results/sweep_cuda_opt.csv, results/sweep_scaling.csv
 ```
 
 ## Patterns
@@ -95,5 +114,7 @@ ctest --test-dir build --output-on-failure
 
 ## Report
 
-LaTeX sources live under `report/`. Build with `latexmk -pdf main.tex` from
+LaTeX sources live under `report/`: `main.tex` is the graded assignment report
+(Spanish, with results and the Nsight profiling) and `manual.tex` is the
+developer manual (English). Build either with `latexmk -pdf <file>.tex` from
 that directory.
