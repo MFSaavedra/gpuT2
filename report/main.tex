@@ -75,9 +75,10 @@
 	bit a bit contra la CPU como oráculo. Se comparan dos variaciones de
 	configuración del kernel (tamaño de bloque y uso de memoria compartida) y se
 	analiza a partir de qué tamaño de cuadrícula $N \times M$ conviene usar la GPU. La
-	GPU alcanza hasta $\approx 200\times$ sobre la mejor CPU paralela, limitada por el
-	ancho de banda de GDDR6; la memoria compartida resulta contraproducente para este
-	\emph{stencil} de 1 byte.
+	GPU alcanza hasta $\approx 200\times$ sobre la mejor CPU paralela; el perfilamiento
+	revela que el kernel está limitado por la latencia de su tubería de memoria en chip
+	---no por el ancho de banda de DRAM, que queda al $\approx20\%$--- y que la memoria
+	compartida resulta contraproducente para este \emph{stencil} de 1 byte.
 \end{abstractd}
 
 % TABLA DE CONTENIDOS - ÍNDICE
@@ -438,16 +439,19 @@ El valor de $q$ depende del reúso de datos:
 	\item \textbf{Reúso ideal} ($q = 2$): cada celda se trae de la DRAM una sola vez
 	      ---sirve como vecina de sus ocho contiguas desde la caché--- y se escribe
 	      una vez. Es el piso de tráfico: una lectura y una escritura por celda.
-	\item \textbf{Sin reúso} ($q \approx 10$): cada hilo lee los nueve bytes de su
-	      vecindario $3\times3$ desde la memoria, más la escritura. Es el techo de
-	      tráfico de un \emph{stencil} ingenuo que no comparte lecturas.
+	\item \textbf{Sin caché} ($q \approx 10$): cada hilo \emph{solicita} los nueve
+	      bytes de su vecindario $3\times3$ más la escritura. Es el tráfico que vería
+	      la DRAM si ninguna caché interviniera. En la práctica sí interviene: en la
+	      GPU la L2 sirve casi todas esas solicitudes y devuelve el tráfico real de
+	      DRAM a $q\approx2$ (medido en la Sección~\ref{sec:profiling}).
 \end{itemize}
 
-La cota de cómputo queda muy por encima: la GTX~1660~Ti entrega
+La cota de cómputo aritmético queda muy por encima: la GTX~1660~Ti entrega
 $1536 \times 2 \times 2{,}1\,\text{GHz} \approx 6{,}5$~TFLOP/s que, repartidos entre
-las $\sim$10 operaciones enteras por celda, darían cientos de Gcélulas/s ---un orden
-de magnitud sobre cualquier cota de memoria---. Por eso el problema es claramente
-\emph{memory-bound} y la Ecuación~\ref{eq:roofline} es la que aplica.
+las $\sim$10 operaciones enteras por celda, darían cientos de Gcélulas/s. El problema
+es, pues, \emph{memory-bound} ---lo limita el sistema de memoria, no la ALU---, si bien
+el perfilamiento (Sección~\ref{sec:profiling}) precisa \emph{qué} parte de ese sistema:
+no la DRAM, sino la tubería en chip (L2/LSU) y la latencia de las cargas.
 
 \subsection{Hardware del equipo de pruebas}
 \label{sec:hw}
@@ -477,7 +481,7 @@ procesador (DDR4-2666, doble canal).
 	\end{tabular}
 \end{table}
 
-\subsection{Cota de la GPU (GDDR6)}
+\subsection{Cota de la GPU: DRAM, caché L2 y latencia}
 \label{sec:cota-gpu}
 
 La VRAM es GDDR6 sobre un bus de 192 bits a 12~Gbit/s por pin. Como GDDR6 transfiere
@@ -490,12 +494,20 @@ en ambos flancos del reloj (DDR), el reloj de memoria que reporta la GPU
 	\label{eq:bw-gpu}
 \end{equation}
 %
-Sustituyendo en la Ecuación~\ref{eq:roofline} (Tabla~\ref{tab:cotas}): con reúso
-ideal la GPU podría llegar a $144$~Gcélulas/s, y un kernel ingenuo (sin reúso) queda
-acotado a $\approx 28{,}8$~Gcélulas/s. El kernel de memoria global de esta tarea
----que lee los nueve vecinos directamente--- vive cerca de este segundo techo:
-alcanza $\approx 28$~Gcélulas/s, lo que implica $q \approx 288/28 \approx 10$
-bytes/celda; esto es, prácticamente sin reúso de lecturas a nivel de DRAM efectiva.
+El kernel global emite $\sim$10 \emph{solicitudes} de memoria por celda (nueve vecinos
+más la escritura), lo que sugeriría $q\approx10$ y un techo de $\approx28{,}8$~Gcélulas/s
+(fila ``sin caché'' de la Tabla~\ref{tab:cotas}). \textbf{Pero esa lectura es
+engañosa}: hay que separar las \emph{solicitudes} ---que la caché puede absorber--- del
+\emph{tráfico real a DRAM}. El perfilamiento con Nsight Compute
+(Sección~\ref{sec:profiling}) muestra que la L2 sirve el $\sim$88\% de esas
+solicitudes, de modo que la DRAM solo ve $q\approx2$ bytes/celda y queda al
+$\approx20\%$ de su ancho de banda. La cota de DRAM \emph{pertinente} es por tanto la
+de $q=2$, es decir $288/2 = 144$~Gcélulas/s, y el kernel alcanza $\approx28$--$32$, o
+sea solo $\approx20\%$ de ese techo. \textbf{La GPU no está limitada por el ancho de
+banda de DRAM} sino por la tubería de memoria en chip (L2/LSU) y la latencia de uso de
+las cargas: cómputo y tubería de memoria quedan co-limitados al $\sim$65\% de su
+máximo, con la mayoría de los ciclos detenidos esperando los datos de las cargas. El
+recurso que manda es L2, no GDDR6.
 
 \begin{table}[H]
 	\centering
@@ -506,20 +518,22 @@ bytes/celda; esto es, prácticamente sin reúso de lecturas a nivel de DRAM efec
 		\toprule
 		\textbf{Backend} & \textbf{$B$} & \textbf{$q$ (B/celda)} & \textbf{$P_{\max}$} \\
 		\midrule
-		GPU (reúso ideal) & 288 GB/s    & 2  & 144 Gcélulas/s \\
-		GPU (sin reúso)   & 288 GB/s    & 10 & 28{,}8 Gcélulas/s \\
-		CPU (techo DRAM)  & 42{,}7 GB/s & 2  & 21{,}3 Gcélulas/s \\
+		GPU --- DRAM con L2 ($q\approx2$, medido) & 288 GB/s    & 2  & 144 Gcélulas/s \\
+		GPU --- sin caché ($q=10$, hipotético)    & 288 GB/s    & 10 & 28{,}8 Gcélulas/s \\
+		CPU --- DRAM ($q=2$)                      & 42{,}7 GB/s & 2  & 21{,}3 Gcélulas/s \\
 		\bottomrule
 	\end{tabular}
 \end{table}
 
-Esto explica de antemano por qué la \textbf{memoria compartida no puede ayudar} aquí.
-Su único beneficio sería bajar $q$ de $\sim$10 hacia $\sim$2 reutilizando el halo;
-pero la caché L2 de la GPU ($1{,}5$~MiB) ya sirve buena parte de esas lecturas, y la
-variante con memoria compartida agrega \texttt{\_\_syncthreads()} y el costo de
-cargar el halo byte a byte. El \emph{stencil} de 1 byte es demasiado liviano para
-amortizar ese costo: la cota efectiva no sube y, en la práctica, el kernel compartido
-queda \emph{por debajo} del global (Sección~\ref{sec:res-opciones}).
+Esto explica con precisión por qué la \textbf{memoria compartida no puede ayudar} aquí.
+Su único beneficio sería reducir el tráfico de DRAM, pero la L2 ya lo dejó en
+$q\approx2$: el perfilamiento confirma que la versión compartida mueve los mismos
+$\approx2$ bytes/celda a DRAM. A cambio \emph{pierde} el reúso barato de L1 (la tasa de
+acierto cae del $67\%$ al $25\%$, pues las cargas pasan ahora por la memoria compartida)
+y añade una pasada de carga cooperativa y la barrera \texttt{\_\_syncthreads()}. El
+resultado es $\approx1{,}9\times$ más lento pese a una ocupación mayor
+(Sección~\ref{sec:res-opciones}): se quita presión a un recurso (la DRAM) que no era el
+cuello de botella y se añade serialización.
 
 \subsection{Cota de la CPU: memoria contra cómputo}
 \label{sec:cota-cpu}
@@ -547,13 +561,13 @@ toca. La CPU no está limitada por ancho de banda sino por \emph{cómputo}: cuá
 instrucciones (cálculo de índices, ocho lecturas, sumas, el salto de la regla) puede
 retirar cada núcleo por ciclo.
 
-La medición lo confirma: la versión de 12 hilos alcanza $\approx 0{,}14$~Gcélulas/s,
-apenas el $0{,}7\%$ del techo de DRAM. Repartido entre 12 hilos son
+La medición lo confirma: la versión de 12 hilos alcanza $\approx 0{,}16$~Gcélulas/s,
+apenas el $0{,}75\%$ del techo de DRAM. Repartido entre 12 hilos son
 $\sim$12~Mcélulas/s por hilo; a un reloj sostenido de $\sim$3{,}5~GHz eso son unos
 \textbf{300 ciclos por celda}, coherente con un \emph{kernel} escalar, con un salto
 por celda y verificación de bordes, sin vectorizar. La consecuencia para el informe
 es clara: el techo realista de la CPU \emph{tal como está implementada} es del orden
-de $0{,}14$~Gcélulas/s, no los $21$ del límite de memoria; solo una reescritura
+de $0{,}16$~Gcélulas/s, no los $21$ del límite de memoria; solo una reescritura
 vectorizada (AVX2) y sin saltos se acercaría a ese límite.
 
 \subsection{Transferencias PCIe y el \emph{ping-pong} en el \emph{device}}
@@ -586,46 +600,50 @@ Este es el \emph{speed-up} ``justo'' que predice el hardware. El valor medido (G
 contra 12 hilos) será mucho mayor ---del orden de $200\times$--- precisamente porque
 la CPU \textbf{no} está en su techo de memoria: opera a $\sim$1/150 de él
 (Sección~\ref{sec:cota-cpu}). Es decir, un \emph{speed-up} de $\sim$200$\times$ no
-mide una ventaja de hardware de $200\times$, sino la suma de dos efectos: la GPU
-trabajando cerca de su techo de banda y una CPU base escalar trabajando muy por
-debajo del suyo. El informe reporta ambos números: $\sim$6{,}8$\times$ es la
-comparación de hardware ``limpia'', mientras que $\sim$200$\times$ es el
-\emph{speed-up} de ingeniería contra la implementación secuencial de referencia.
+mide una ventaja de hardware de $200\times$. Conviene matizar: ni la CPU ni la GPU
+saturan su DRAM ---la CPU está limitada por cómputo y la GPU por la latencia de su
+tubería de memoria (Sección~\ref{sec:cota-gpu})---. El $200\times$ refleja, entonces,
+el paralelismo de la GPU ocultando latencia frente a una CPU escalar; el cociente de
+anchos de banda ($\sim$6{,}8$\times$) es solo una referencia de ``qué pasaría si ambos
+saturaran su DRAM''. El informe reporta ambos para no confundir la ventaja de
+ingeniería con la de hardware puro.
 
 \subsection{Validación del modelo}
 \label{sec:cota-validacion}
 
-La Tabla~\ref{tab:validacion} contrasta las cotas con la medición de los barridos
-(Sección~\ref{sec:resultados}). Dos hechos confirman el modelo: el kernel global
-\textbf{opera al borde del techo de GDDR6} ---su tráfico efectivo es de $\approx 9$
-bytes/celda en $N=2048$ (mejor reúso en L2) y sube a $\approx 11$--$12$ en las grillas
-grandes--- y la CPU se queda en \textbf{menos del $1\%$} de su techo de DRAM, limitada
-por cómputo y no por memoria.
+La Tabla~\ref{tab:validacion} contrasta las cotas con la medición y el perfilamiento
+(Sección~\ref{sec:profiling}). El hallazgo central corrige la intuición inicial: el
+kernel global \textbf{no está limitado por el ancho de banda de DRAM}. La L2 sirve el
+$\sim$88\% de las solicitudes, así que la DRAM solo ve $q\approx2$ B/celda y opera al
+$\approx20\%$ de su capacidad; el kernel alcanza $\approx28$--$32$~Gcélulas/s, apenas
+el $\approx20\%$ de la cota de DRAM de $144$~Gcélulas/s, y su límite real es la tubería
+de memoria en chip y la latencia de las cargas ($\sim$65\% de SOL). La CPU, en cambio,
+se queda $\sim$130$\times$ por debajo de su techo de DRAM ---limitada por cómputo---.
 
 \begin{table}[H]
 	\centering
-	\caption{Cota \emph{roofline} contra medición (mejor configuración). $1$~Gcélula/s
-	$=10^{3}$~Mcélulas/s.}
+	\caption{Cota de DRAM contra medición (mejor configuración). Ninguno satura su DRAM:
+	a la GPU la limita la tubería L2/latencia ($\sim$65\% SOL); a la CPU, el cómputo.
+	$1$~Gcélula/s $=10^{3}$~Mcélulas/s.}
 	\label{tab:validacion}
 	\begin{tabular}{@{}llll@{}}
 		\toprule
-		\textbf{Backend / config.} & \textbf{Cota} & \textbf{Medido} & \textbf{\% cota} \\
+		\textbf{Backend / config.} & \textbf{Cota DRAM} & \textbf{Medido} & \textbf{\% cota} \\
 		\midrule
-		GPU global (sin reúso, $q=10$) & 28{,}8 Gcél/s & 25--32 Gcél/s (máx $32{,}1$) & $\sim$100\% \\
-		GPU (reúso ideal, $q=2$)       & 144 Gcél/s    & no alcanzable con 1 B/celda  & --- \\
-		CPU, 12 hilos (techo DRAM)     & 21{,}3 Gcél/s & $\approx 0{,}16$ Gcél/s      & 0{,}8\% \\
+		GPU global (DRAM, L2 da $q\approx2$) & 144 Gcél/s    & 25--32 (máx $32{,}1$) Gcél/s & $\approx20\%$ \\
+		CPU, 12 hilos (DRAM, $q=2$)          & 21{,}3 Gcél/s & $\approx 0{,}16$ Gcél/s       & $0{,}75\%$ \\
 		\bottomrule
 	\end{tabular}
 \end{table}
 
-En suma, el \textbf{máximo obtenible} en este proyecto queda bien delimitado: la GPU
-toca su techo en $\approx 25$--$32$~Gcélulas/s con la disposición de 1 byte por
-celda, y superarlo exigiría reducir $q$ (por ejemplo, empaquetar las celdas en bits,
-fuera del alcance de esta tarea). La CPU, tal como está implementada, ronda
-$0{,}16$~Gcélulas/s, dominada por el costo por celda y no por la memoria. El
-\emph{speed-up} de hardware ``limpio'' es $\sim$6{,}8$\times$; el medido contra la
-referencia secuencial es mucho mayor por la diferencia de madurez entre ambas
-implementaciones.
+En suma, el \textbf{máximo obtenible} en este proyecto queda así: la GPU rinde
+$\approx 25$--$32$~Gcélulas/s, no contra el techo de DRAM ($144$) sino contra el de su
+tubería de memoria y latencia. Hay, por tanto, margen ---ocultar mejor la latencia con
+más paralelismo de instrucción (varias celdas por hilo) podría acercarla al techo de
+DRAM---; reducir el tráfico (empaquetar bits) ayudaría poco mientras la DRAM esté al
+$20\%$. La CPU ronda $0{,}16$~Gcélulas/s, dominada por el cómputo, no por la memoria.
+El cociente de anchos de banda ($\sim$6{,}8$\times$) es solo una referencia: ninguno de
+los dos satura su DRAM.
 
 \section{Resultados}
 \label{sec:resultados}
@@ -664,8 +682,9 @@ tamaño de grilla. La CPU secuencial es prácticamente \textbf{plana} en $\appro
 27$~Mcélulas/s: como se anticipó en la Sección~\ref{sec:cota-cpu}, está limitada por
 cómputo, no por memoria. La CPU paralela se estabiliza en $\approx 150$--$160$, y la
 GPU domina por \textbf{dos a tres órdenes de magnitud}, con su máximo ($\approx
-32$~Gcélulas/s) en $N=2048$; más allá decae levemente al exceder la grilla la caché
-L2 y bajar la reutilización. La curva \texttt{CUDA (wall)} incluye el costo de
+32$~Gcélulas/s) en $N=2048$; más allá decae levemente (efecto de reloj/SOL: el
+perfilamiento muestra que la tasa de acierto de L2 se mantiene en $\approx88\%$ y la
+DRAM al $\approx20\%$ también en $N=8192$). La curva \texttt{CUDA (wall)} incluye el costo de
 lanzamiento por paso: se separa del \texttt{kernel} en grillas pequeñas (la GPU queda
 infrautilizada) y se le junta para $N \gtrsim 2048$.
 
@@ -779,16 +798,77 @@ Con esta metodología ---cronometraje de kernel/lazo con \texttt{NullRenderer}, 
 medido, incluso en $N=64$: su único costo es el lanzamiento y la CPU base es débil. Un
 umbral por debajo del cual convenga la CPU solo aparece al contabilizar el costo PCIe
 de subir/bajar la grilla (Sección~\ref{sec:cota-pcie}): transferir la grilla en cada
-generación acotaría la GPU a $\sim 12$~Gcélulas/s, y para grillas muy pequeñas el costo
+generación acotaría la GPU a $\sim 12$~Gcélulas/s ---en la práctica $\sim$8, medido en
+la Sección~\ref{sec:profiling}---, y para grillas muy pequeñas el costo
 fijo de transferencia la haría perder frente a la CPU.
 
 \subsection{Perfilamiento (Nsight / Chrono)}
 \label{sec:profiling}
 
-\textit{Pendiente: hallazgos del \emph{profiling} de la mejor solución CUDA con
-Nsight Systems (línea de tiempo) y Nsight Compute (métricas internas del kernel:
-ocupación, \emph{stalls}, throughput de memoria), y de la mejor solución OpenCL
-con \texttt{std::chrono}.}
+Se perfiló la mejor solución CUDA (memoria global, bloque 128) con Nsight Systems
+(línea de tiempo) y Nsight Compute (contadores internos del kernel). Estas
+herramientas \emph{no} producen los números de rendimiento ---esos vienen del
+cronometraje en programa--- sino que explican \emph{por qué} el kernel rinde lo que
+rinde.
+
+\paragraph{Nsight Systems (\texttt{nsys}).} Sobre $200$ generaciones en $8192^2$, cada
+lanzamiento de \texttt{lifeGlobal} dura $\approx2{,}3$--$2{,}6$~ms (los $\approx28$
+Gcélulas/s ya medidos). El costo de \emph{host} por paso ---\texttt{cudaLaunchKernel}
+($\approx15\,\mu\mathrm{s}$) más los dos \texttt{cudaEventRecord}
+($\approx5\,\mu\mathrm{s}$ c/u)--- suma $\sim$25--30~$\mu\mathrm{s}$: despreciable
+frente al kernel en grillas grandes ($0{,}1\%$) pero dominante en las pequeñas, lo que
+explica la rodilla de eficiencia de la Sección~\ref{sec:umbral}. La única
+transferencia, la subida inicial de $67$~MB, tardó $8{,}0$~ms, esto es
+\textbf{$8{,}4$~GB/s} ---por debajo del límite del enlace porque el buffer de
+\emph{host} es \emph{pageable} (un \texttt{std::vector})---. Esto refina la
+Sección~\ref{sec:cota-pcie}: transferir cada generación acotaría la GPU a
+$\sim$8~Gcélulas/s (no $\sim$12), reforzando la decisión de hacer el \emph{ping-pong}
+en el \emph{device}.
+
+\paragraph{Nsight Compute (\texttt{ncu}).} Es el hallazgo que corrige el modelo. La
+Tabla~\ref{tab:ncu} resume las métricas del kernel global y del de memoria compartida
+(bloque 128, $N=4096$; el cuadro es idéntico en $8192$). Tres lecturas:
+
+\begin{itemize}
+	\item \textbf{El kernel global no está limitado por DRAM.} La L2 acierta el
+	      $88\%$ de las solicitudes, así que la DRAM solo mueve $\approx2$ bytes/celda
+	      y queda al $\approx20\%$. Cómputo y tubería de memoria están co-limitados al
+	      $\sim$66\% de SOL, y el $\sim$54\% de los ciclos se detiene esperando los
+	      datos de las cargas (\emph{long scoreboard}): el kernel es
+	      \textbf{latency-bound sobre cargas servidas por caché}, no
+	      \emph{bandwidth-bound} sobre DRAM.
+	\item \textbf{Por qué pierde la memoria compartida.} Mueve los mismos $\approx2$
+	      bytes/celda a DRAM (no gana nada ahí), pero su acierto en L1 se desploma del
+	      $67\%$ al $25\%$ (las cargas pasan ahora por la memoria compartida) y paga la
+	      carga cooperativa y la barrera. Acaba $\approx1{,}9\times$ más lenta
+	      \emph{pese} a una ocupación mayor ($91\%$ vs.\ $82\%$).
+	\item \textbf{La ocupación no es el límite.} Ambos kernels superan el $80\%$ de
+	      ocupación alcanzada; más hilos no ayudarían. Esto cierra el porqué de la
+	      meseta del tamaño de bloque (Sección~\ref{sec:res-opciones}).
+\end{itemize}
+
+\begin{table}[H]
+	\centering
+	\caption{Nsight Compute: kernel global \emph{vs.}\ compartido (bloque 128, $N=4096$).}
+	\label{tab:ncu}
+	\begin{tabular}{@{}lrr@{}}
+		\toprule
+		\textbf{Métrica} & \textbf{global} & \textbf{compartida} \\
+		\midrule
+		Rendimiento [Gcélulas/s]        & 28{,}0  & 14{,}8 \\
+		Tráfico de DRAM [B/celda]       & 2{,}0   & 2{,}0  \\
+		Uso de DRAM [\% del pico]       & 19{,}7  & 10{,}4 \\
+		Acierto de L2 [\%]              & 87{,}9  & 87{,}4 \\
+		Acierto de L1/TEX [\%]          & 67{,}0  & 24{,}9 \\
+		SOL cómputo / memoria [\%]      & 66 / 66 & 62 / 45 \\
+		Ocupación alcanzada [\%]        & 81{,}7  & 90{,}7 \\
+		\emph{Stall} dominante          & scoreboard ($54\%$) & scoreboard + barrera \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+El perfilamiento de OpenCL con \texttt{std::chrono} queda pendiente junto con ese
+backend.
 
 \section{Conclusiones}
 \label{sec:conclusiones}
@@ -807,8 +887,10 @@ hallazgos principales:
 	\item \textbf{CPU.} Escala hasta los 6 núcleos físicos ($\approx 5{,}4\times$); el
 	      \emph{hyperthreading} aporta poco y, por la sincronización con barrera,
 	      desbalancea en 8 y 10 hilos.
-	\item \textbf{GPU.} $\approx 32$~Gcélulas/s, limitada por el ancho de banda de
-	      GDDR6 ($288$~GB/s); el kernel global opera al borde de ese techo.
+	\item \textbf{GPU.} $\approx 32$~Gcélulas/s. El perfilamiento revela que \emph{no}
+	      la limita el ancho de banda de DRAM (al $\approx20\%$, pues la L2 sirve el
+	      $88\%$ de las solicitudes) sino la tubería L2/LSU y la latencia ($\sim$65\%
+	      de SOL); hay margen de mejora con más paralelismo de instrucción.
 	\item \textbf{Speed-up.} Hasta $\approx 200\times$ sobre la mejor CPU paralela y
 	      $\approx 1200\times$ sobre la secuencial; la cota ``limpia'' de hardware es
 	      $\approx 6{,}8\times$, y la diferencia se explica por una CPU base no

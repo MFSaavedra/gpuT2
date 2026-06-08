@@ -49,10 +49,11 @@ The engine/renderer **strategy** layout below is in place. What exists and works
 
 - **Benchmarks** — run. `scripts/sweep.sh` drives the CPU(threads) + CUDA(block×shared) sweeps to
   `results/sweep_*.csv`; `analysis/results.ipynb` (Spanish) plots them to `report/img/bench_*.png`.
-  Headline: CUDA peaks ~32 Gcells/s (GDDR6-bound), ~200× over the best parallel CPU; **shared memory is
-  slower** (~0.55×) and block 64–128 is optimal — both as the roofline predicted. The report's
-  Resultados/Análisis and theoretical-ceilings sections are filled from this data. `ncu`/`nsys`
-  profiling of the best kernel is the remaining deep-dive.
+  Headline: CUDA peaks ~32 Gcells/s, ~200× over the best parallel CPU; **shared memory is slower**
+  (~0.55×) and block 64–128 is optimal. `ncu` corrected the roofline: the kernel is **not** DRAM-bound —
+  L2 serves ~88% of requests so DRAM sees ~2 B/cell at ~20% util; it's latency/L2-pipe-bound (~65% SOL).
+  `nsys`: ~30 µs/step launch overhead, H2D 8.4 GB/s (pageable `std::vector`). Report Resultados/Análisis,
+  §Cotas, and §Perfilamiento are filled from this (`results/profiling/*.ncu-rep`).
 
 Still greenfield: OpenCL (`OpenCLEngine`) — no device source yet, so `--engine opencl` errors (and is
 omitted from a build without `-DBUILD_OPENCL=ON`). GPU CMake targets are opt-in and double-gated (the
