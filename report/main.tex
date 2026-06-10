@@ -63,16 +63,22 @@
 
 % RESUMEN O ABSTRACT
 \begin{abstractd}
-	Este informe describe el desarrollo y evaluación de tres implementaciones
-	del Juego de la Vida de Conway: una versión secuencial en CPU, una
-	versión paralela en CUDA y una versión paralela en OpenCL. Se incluye
-	una variación de las reglas originales en la que una célula muerta
-	también nace si tiene exactamente $6$ vecinos vivos. Se miden las
-	células evaluadas por segundo para distintos tamaños de cuadrícula
-	$N \times M$, se comparan dos variaciones de configuración del kernel
-	GPU, y se analizan los \emph{speed-up} respecto de la implementación en
-	CPU para determinar a partir de qué tamaño de cuadrícula resulta
-	conveniente utilizar la GPU.
+	Este informe describe el desarrollo y la evaluación de implementaciones del
+	Juego de la Vida de Conway en CPU (secuencial y paralela) y GPU, con el fin de
+	medir las células evaluadas por segundo y el \emph{speed-up} de la GPU respecto
+	de la CPU. Se utiliza una variación de las reglas estándar en la que una célula
+	muerta también nace si tiene exactamente $6$ vecinos vivos (la regla
+	\emph{HighLife}, \texttt{B36/S23}). El núcleo del proyecto es agnóstico al
+	backend: una grilla plana común, una única regla compartida y dos interfaces
+	intercambiables (motor de simulación y \emph{renderer}). A la fecha están
+	implementados y verificados los motores de CPU y CUDA; este último se compara
+	bit a bit contra la CPU como oráculo. Se comparan dos variaciones de
+	configuración del kernel (tamaño de bloque y uso de memoria compartida) y se
+	analiza a partir de qué tamaño de cuadrícula $N \times M$ conviene usar la GPU. La
+	GPU alcanza hasta $\approx 200\times$ sobre la mejor CPU paralela; el perfilamiento
+	revela que el kernel está limitado por la latencia de su tubería de memoria en chip
+	---no por el ancho de banda de DRAM, que queda al $\approx20\%$--- y que la memoria
+	compartida resulta contraproducente para este \emph{stencil} de 1 byte.
 \end{abstractd}
 
 % TABLA DE CONTENIDOS - ÍNDICE
@@ -86,14 +92,10 @@
 \section{Introducción}
 \label{sec:introduccion}
 
-% (0.5 pt)
-%   - Breve descripción del problema.
-%   - Resultados esperados.
-
-El Juego de la Vida de Conway es un autómata celular bidimensional en el
-que cada celda de una grilla $N \times M$ se encuentra viva o muerta y
-evoluciona en pasos discretos según el estado de sus ocho vecinos. En esta
-tarea se considera la variación de las reglas estándar dada por:
+El Juego de la Vida de Conway es un autómata celular bidimensional en el que cada
+celda de una grilla $N \times M$ se encuentra viva o muerta y evoluciona en pasos
+discretos (generaciones) según el estado de sus ocho vecinos. En esta tarea se
+considera la siguiente \emph{variación} de las reglas estándar:
 
 \begin{itemize}
 	\item Una célula nace en un espacio muerto si tiene exactamente $3$ vecinos vivos.
@@ -101,122 +103,804 @@ tarea se considera la variación de las reglas estándar dada por:
 	\item Una célula también nace en un espacio muerto si tiene exactamente $6$ vecinos vivos.
 \end{itemize}
 
-El objetivo es implementar el algoritmo en CPU (secuencial), CUDA y OpenCL,
-medir su rendimiento en células evaluadas por segundo, y analizar el
-\emph{speed-up} respecto de la versión secuencial.
+La cláusula adicional (nacer con $6$ vecinos) corresponde a la regla conocida como
+\emph{HighLife} (\texttt{B36/S23}). Es el detalle más fácil de implementar de
+forma inconsistente, por lo que debe valer idénticamente en todos los backends.
+
+El objetivo es implementar el algoritmo en CPU (secuencial), CUDA y OpenCL, medir
+su rendimiento en \emph{células evaluadas por segundo}, comparar dos técnicas de
+optimización del kernel y analizar el \emph{speed-up} respecto de la versión
+secuencial, determinando desde qué tamaño de grilla conviene usar la GPU.
 
 \subsection{Resultados esperados}
 \label{sec:resultados-esperados}
 
-Se espera que las implementaciones en GPU superen significativamente a la
-CPU para grillas grandes, donde el paralelismo de datos se vuelve dominante
-frente al costo de transferencias de memoria entre host y device. Para
-grillas pequeñas, en cambio, se espera que el costo de lanzamiento del
-kernel y de transferencia haga que la CPU sea competitiva o incluso más
-rápida.
+El problema es un \emph{stencil} de 9 puntos sobre celdas de 1 byte: muy poco
+cálculo por byte leído, es decir, limitado por ancho de banda de memoria (las cotas
+teóricas se derivan en la Sección~\ref{sec:cotas}). Se espera, en consecuencia:
+
+\begin{itemize}
+	\item Que la GPU supere ampliamente a la CPU para grillas grandes, donde su
+	      mayor ancho de banda y paralelismo dominan frente al costo de
+	      transferencia \emph{host}\,$\leftrightarrow$\,\emph{device}.
+	\item Que para grillas pequeñas el costo de lanzamiento del kernel y de
+	      transferencia haga competitiva (o superior) a la CPU.
+	\item Que el tamaño de bloque dé una curva cóncava que se estabiliza hacia
+	      $128$--$256$ hilos, y que la memoria compartida aporte poco o nada,
+	      precisamente por tratarse de un \emph{stencil} de 1 byte que ya reside
+	      en caché.
+\end{itemize}
 
 \section{Implementación}
 \label{sec:implementacion}
 
-% (1.0 pt)
-%   - Implementación secuencial.
-%   - Implementación paralela en CUDA.
-%   - Implementación paralela en OpenCL.
-%   - Variaciones en configuración.
+\subsection{Arquitectura general}
+\label{sec:arquitectura}
 
-\subsection{Implementación secuencial en CPU}
+El proyecto sigue el patrón \emph{estrategia}: un núcleo agnóstico al backend más
+dos interfaces intercambiables. Lo único que difiere realmente entre backends ---
+el cómputo de una generación --- vive tras \texttt{ISimEngine}; la salida vive
+tras \texttt{IRenderer}; y la aplicación arma en tiempo de ejecución un motor y un
+\emph{renderer} a partir de la configuración. La Figura~\ref{fig:uml} resume las
+clases y relaciones.
+
+\insertimage{uml_architecture}{width=\linewidth}{Diagrama de clases del proyecto.
+La \texttt{Application} posee un \texttt{ISimEngine} y un \texttt{IRenderer} (las
+dos estrategias). \texttt{CpuEngine} y \texttt{CudaEngine} realizan
+\texttt{ISimEngine}; \texttt{OpenCLEngine} está planificado. Las flechas
+punteadas son dependencias: \texttt{CpuEngine} y \texttt{CudaEngine} usan ambos
+\texttt{LifeRules::nextState}. \label{fig:uml}}
+
+Tres decisiones del núcleo hacen posible comparar los backends de forma justa:
+
+\paragraph{Una grilla plana compartida.} \texttt{Grid} es un
+\texttt{std::vector<unsigned char>} contiguo, fila por fila, indexado
+$y\cdot\text{cols}+x$ ($0=$ muerta, $1=$ viva). Es exactamente el formato de un
+buffer de \emph{device}, de modo que subir/bajar la grilla es una copia sin
+traducción y los tres backends operan sobre los mismos bytes. Se acepta el costo
+de 1 byte por celda (en vez de empaquetar bits) para mantener el \emph{stencil}
+como una simple lectura de arreglo, idéntica en CPU y GPU.
+
+\paragraph{Una única regla, compilada para \emph{host} y \emph{device}.} La regla
+variante se escribe una sola vez en \texttt{LifeRules.hpp}. Bajo \texttt{nvcc} se
+califica \texttt{\_\_host\_\_ \_\_device\_\_}, de modo que la CPU y CUDA usan el
+mismo código fuente (Código~\ref{code:liferules}); OpenCL no puede incluir
+encabezados de C\texttt{++}, por lo que replicará esta función en
+\texttt{kernel.cl}.
+
+\begin{sourcecode}[\label{code:liferules}]{cpp}{include/gol/LifeRules.hpp --- la regla variante, compartida por CPU y CUDA.}
+#ifdef __CUDACC__
+#define GOL_FN __host__ __device__ inline
+#else
+#define GOL_FN inline
+#endif
+
+GOL_FN unsigned char nextState(unsigned char alive, int neighbors) {
+  if (alive)
+    return (neighbors == 2 || neighbors == 3) ? 1u : 0u; // sobrevive
+  return (neighbors == 3 || neighbors == 6) ? 1u : 0u;   // nace (3 o 6)
+}
+\end{sourcecode}
+
+\paragraph{Manejo de bordes idéntico.} Por defecto los bordes son acotados (un
+vecino fuera de rango cuenta como muerto); con \texttt{--wrap} se vuelven
+toroidales. Ambos modos deben coincidir bit a bit entre backends, y se verifican
+en las pruebas (Sección~\ref{sec:verificacion}).
+
+\paragraph{Contrato de doble buffer (\emph{ping-pong}).} Cada motor mantiene dos
+buffers; \texttt{step()} lee el ``actual'', escribe el ``siguiente'' y los
+intercambia, de modo que una llamada avanza exactamente una generación y nunca
+solapa entrada y salida. Las GPU hacen el intercambio en el \emph{device}; la
+grilla del \emph{host} solo se toca en \texttt{upload()}/\texttt{download()}.
+
+\subsection{Implementación en CPU (secuencial y paralela)}
 \label{sec:impl-cpu}
 
-Describir aquí la estructura del programa secuencial: representación de la
-grilla como arreglo plano de \texttt{unsigned char}, doble buffer
-(\texttt{current}/\texttt{next}), recorrido por filas y columnas, y conteo
-de vecinos con condiciones de borde.
+Una sola clase, \texttt{CpuEngine}, sirve tanto al \emph{baseline} secuencial como
+a la versión paralela, porque el paso del Juego de la Vida no tiene dependencias
+intra-generación: cada celda lee solo el buffer actual y escribe el siguiente.
+Paralelizar es, entonces, repartir las \emph{filas} entre hilos; la regla por
+celda es idéntica. El recuento de vecinos honra el modo de borde y suma los
+valores $0/1$ de los vecinos; la regla compartida (\texttt{nextState}) decide el
+estado siguiente.
+
+El reparto es por bandas de filas contiguas (buen comportamiento de caché y
+escrituras disjuntas). Con \texttt{threads == 1} no se crea ningún hilo ni
+barrera: el barrido secuencial es el caso degenerado de una sola partición. Con
+\texttt{threads >= 2} se usa un \emph{pool} de hilos persistente sincronizado con
+una \texttt{std::barrier} de dos fases, de modo que el costo de crear hilos no
+contamina la métrica. El valor \texttt{threads == 0} se resuelve a
+\texttt{std::thread::hardware\_concurrency()}.
+
+\begin{sourcecode}{cpp}{src/engines/cpu/CpuEngine.cpp --- un paso (mismo código para secuencial y paralelo).}
+void CpuEngine::step() {
+  Timer t;
+  if (workers_.empty()) {                  // secuencial: un solo barrido, sin sincronización
+    computeRows(cur_.data(), nxt_.data(), 0, rows_);
+  } else {                                  // paralelo: bandas de filas
+    src_ = cur_.data();
+    dst_ = nxt_.data();
+    barrier_->arrive_and_wait();            // libera a los workers sobre sus filas
+    auto [yBegin, yEnd] = rangeFor(0);
+    computeRows(src_, dst_, yBegin, yEnd);   // el hilo main calcula la partición 0
+    barrier_->arrive_and_wait();            // espera a que todas las particiones terminen
+  }
+  std::swap(cur_, nxt_);                     // ping-pong
+  lastMs_ = t.elapsedMillis();              // cronometraje con std::chrono
+}
+\end{sourcecode}
+
+Como secuencial y paralelo ejecutan la misma función de cómputo
+(\texttt{computeRows}) y solo difieren en el rango de filas, producen tableros
+idénticos; esto se comprueba en las pruebas (Sección~\ref{sec:verificacion}).
 
 \subsection{Implementación paralela en CUDA}
 \label{sec:impl-cuda}
 
-Describir aquí la organización del \emph{grid} y los \emph{blocks}, el
-mapeo de un hilo por celda, el uso (o no) de memoria compartida con
-\emph{halo}, y la sincronización entre generaciones.
+\texttt{CudaEngine} usa un hilo por celda sobre una grilla 2D de bloques. Posee
+dos buffers de \emph{device} y realiza el \emph{ping-pong} en el \emph{device}; la
+grilla del \emph{host} solo se toca en \texttt{upload} (copia H2D) y
+\texttt{download} (D2H). El encabezado del motor no incluye tipos de CUDA (los
+manejadores se guardan como punteros opacos), de modo que \texttt{main.cpp}
+compila con el compilador anfitrión y solo los \texttt{.cu} pasan por
+\texttt{nvcc}.
+
+Hay dos kernels seleccionables en tiempo de ejecución. El de memoria global lee
+los ocho vecinos directamente; reutiliza \texttt{nextState} de
+\texttt{LifeRules.hpp} y replica el manejo de bordes de la CPU
+(Código~\ref{code:cudakernel}).
+
+\begin{sourcecode}[\label{code:cudakernel}]{cpp}{src/engines/cuda/kernel.cu --- kernel de memoria global (un hilo por celda).}
+__global__ void lifeGlobal(const unsigned char* src, unsigned char* dst,
+                           int rows, int cols, bool wrap) {
+  const int col = blockIdx.x * blockDim.x + threadIdx.x;
+  const int row = blockIdx.y * blockDim.y + threadIdx.y;
+  if (col >= cols || row >= rows) return;
+  int n = 0;
+  for (int dy = -1; dy <= 1; ++dy)
+    for (int dx = -1; dx <= 1; ++dx) {
+      if (dx == 0 && dy == 0) continue;
+      int nc = col + dx, nr = row + dy;
+      if (wrap) { nc = (nc + cols) % cols; nr = (nr + rows) % rows; }
+      else if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue; // borde: muerto
+      n += src[(size_t)nr * cols + nc];
+    }
+  const size_t idx = (size_t)row * cols + col;
+  dst[idx] = nextState(src[idx], n);   // misma regla que la CPU
+}
+\end{sourcecode}
+
+El lanzador mapea el tamaño de bloque sobre un \emph{tile} 2D de ancho fijo $32$ y
+elige el kernel. El ancho $32$ alinea los accesos: hilos consecutivos de un
+\emph{warp} leen celdas (de 1 byte) consecutivas de una fila, logrando lecturas
+coalescentes, lo correcto para un \emph{stencil} limitado por memoria.
+
+\begin{sourcecode}{cpp}{src/engines/cuda/kernel.cu --- mapeo de bloque y elección de kernel.}
+const int bx = 32;                          // filas de 32 -> lecturas coalescentes
+const int by = (blockSize + bx - 1) / bx;   // 32/64/128/256 -> by = 1/2/4/8
+dim3 block(bx, by);
+dim3 grid((cols + bx - 1) / bx, (rows + by - 1) / by);
+if (useShared)
+  lifeShared<<<grid, block, (bx + 2) * (by + 2)>>>(src, dst, rows, cols, wrap);
+else
+  lifeGlobal<<<grid, block>>>(src, dst, rows, cols, wrap);
+\end{sourcecode}
+
+El kernel de memoria compartida (\texttt{--shared}) primero carga
+cooperativamente un \emph{tile} de $(bx{+}2)\times(by{+}2)$ celdas (las del bloque
+más un halo de una celda) en memoria compartida ---aplicando el mismo manejo de
+borde durante la carga del halo--- y luego lee los vecinos desde el \emph{tile}.
+Ambos kernels producen resultados idénticos al oráculo de CPU.
+
+El cómputo se cronometra con \texttt{cudaEvent\_t} alrededor del lanzamiento, de
+modo que \texttt{lastKernelMillis()} reporta solo el tiempo del kernel, excluyendo
+las transferencias; es el análogo en GPU del cronometraje con \texttt{std::chrono}
+de la CPU.
+
+\begin{sourcecode}{cpp}{src/engines/cuda/CudaEngine.cu --- un paso con cronometraje por eventos.}
+void CudaEngine::step() {
+  cudaEventRecord(start);
+  launchLifeStep(dCur_, dNxt_, rows_, cols_, wrap_, blockSize_, useShared_);
+  cudaEventRecord(stop);
+  cudaEventSynchronize(stop);
+  cudaEventElapsedTime(&ms, start, stop);  // solo el kernel, sin H2D/D2H
+  lastMs_ = ms;
+  std::swap(dCur_, dNxt_);                  // ping-pong en el device
+}
+\end{sourcecode}
+
+El \emph{target} de compilación es \texttt{sm\_75} (la GPU de pruebas, una
+GTX~1660~Ti), con \texttt{-lineinfo} para que Nsight Compute pueda atribuir tiempo
+a líneas de código fuente.
 
 \subsection{Implementación paralela en OpenCL}
 \label{sec:impl-opencl}
 
-Describir aquí la creación del contexto, la cola de comandos, la
-compilación del kernel y la configuración del \emph{work-group}. Notar las
-diferencias con CUDA.
+\textit{Pendiente.} El motor de OpenCL (\texttt{OpenCLEngine}) aún no está
+implementado. Seguirá el mismo diseño que CUDA: dos buffers de \emph{device},
+\emph{ping-pong} en el \emph{device}, los mismos dos kernels (global y con memoria
+local) y los mismos botones \texttt{--block}/\texttt{--shared}. La regla y el
+manejo de borde se replicarán en un \texttt{kernel.cl} en C plano, leído en tiempo
+de ejecución y mantenido diff-eable contra \texttt{LifeRules.hpp}. El cronometraje
+del kernel usará eventos de la cola de comandos con
+\texttt{CL\_QUEUE\_PROFILING\_ENABLE}. Se verificará bit a bit contra el oráculo
+de CPU, igual que CUDA.
 
-\subsection{Variaciones en configuración}
+\subsection{Variaciones de configuración}
 \label{sec:variaciones}
 
-Se eligieron las siguientes dos opciones a comparar (de las tres
-disponibles en el enunciado):
+De las tres opciones del enunciado se eligieron dos:
 
 \begin{enumerate}
-	\item Tamaños de bloque $32$, $64$, $128$ y $256$.
-	\item Uso de memoria local por bloque \emph{vs.} sin memoria local.
+	\item \textbf{Tamaño de bloque} $\in \{32, 64, 128, 256\}$ (botón \texttt{--block}).
+	\item \textbf{Memoria local por bloque} \emph{vs.} sin memoria local (botón \texttt{--shared}).
 \end{enumerate}
 
-% Reemplazar por la elección real si difiere.
+No se eligió la opción de arreglos 2D \emph{vs.} mapeo a 1D porque el diseño fija
+una grilla plana 1D compartida por todos los backends; usar arreglos 2D iría en
+contra de esa decisión arquitectónica. Ambas variaciones son seleccionables en
+tiempo de ejecución, de modo que un único binario ejecuta toda la matriz de
+experimentos.
+
+\subsection{Verificación de correctitud}
+\label{sec:verificacion}
+
+\texttt{CpuEngine} es el oráculo de referencia. Las pruebas (GoogleTest)
+verifican, en orden de dependencia:
+
+\begin{itemize}
+	\item \textbf{Regla variante en CPU}: un bloque permanece estático, un
+	      \emph{blinker} oscila con período 2 y una célula muerta con exactamente
+	      $6$ vecinos nace (el caso que define la variante).
+	\item \textbf{Equivalencia secuencial \emph{vs.} paralela}: misma semilla y
+	      mismas generaciones producen un tablero idéntico bit a bit para distinto
+	      número de hilos y ambos modos de borde, incluso en grillas no divisibles.
+	\item \textbf{Equivalencia entre backends (CUDA)}: \texttt{cuda\_equivalence\_test.cpp}
+	      siembra CUDA y CPU igual y exige igualdad bit a bit contra el oráculo
+	      para los tamaños de bloque $\{32,64,128,256\}$, kernels global/compartido
+	      y ambos modos de borde. OpenCL seguirá el mismo patrón.
+\end{itemize}
+
+Adicionalmente, el runner \texttt{bgolly} de Golly (grilla infinita) simula
+exactamente \texttt{B36/S23} y sirve como oráculo externo independiente.
+
+\subsection{Metodología de medición}
+\label{sec:metodologia}
+
+La métrica principal es \emph{células evaluadas por segundo}:
+%
+\begin{equation}
+	\text{Mcélulas/s} =
+	\frac{N \cdot M \cdot G}{t_{\text{transcurrido}} \times 10^{6}},
+	\label{eq:metrica}
+\end{equation}
+%
+con $G$ el número de generaciones. El cronometraje es uniforme y en programa (no
+desde un \emph{profiler}), expuesto por \texttt{ISimEngine::lastKernelMillis()}:
+\texttt{std::chrono} en CPU, \texttt{cudaEvent\_t} en CUDA y eventos de cola en
+OpenCL. Se reporta el tiempo de kernel por separado del de transferencias, y se
+mide siempre con el \texttt{NullRenderer} para que el costo de salida y de
+transferencia no contamine la métrica. El \emph{speed-up} es
+%
+\begin{equation}
+	S(N) = \frac{T_{\text{CPU}}(N)}{T_{\text{GPU}}(N)}.
+	\label{eq:speedup}
+\end{equation}
+
+Para los barridos, el binario ofrece un modo CSV: \texttt{--csv} imprime una fila
+por corrida (columnas \texttt{backend, rows, cols, generations, threads, block,
+shared, wrap, kernel\_ms, wall\_ms, mcells\_kernel, mcells\_wall}) y
+\texttt{--csv-header} imprime solo el encabezado; así un \emph{script} escribe el
+encabezado una vez y agrega una fila por configuración, lista para Pandas.
+
+\subsection{Ejecutables y flujo de uso}
+\label{sec:ejecutables}
+
+El proyecto compila un único ejecutable \texttt{gol} que arma en tiempo de
+ejecución el motor (\texttt{--engine cpu|cuda|opencl}) y el \emph{renderer}
+(\texttt{--renderer null|text|ansi}) según la línea de comandos, siembra la grilla
+(con una semilla aleatoria determinista o un patrón RLE) y ejecuta el bucle de
+generaciones. Bajo \texttt{NullRenderer} el bucle es solo \texttt{step()}, sin
+transferencias ni dibujado, de modo que la medición no se contamina. Los motores
+de GPU son opcionales en CMake (\texttt{-DBUILD\_CUDA=ON}); el binario funciona
+en una máquina sin CUDA ni OpenCL.
+
+\section{Cotas teóricas de rendimiento}
+\label{sec:cotas}
+
+Antes de medir conviene fijar el techo: ¿cuál es el máximo de Mcélulas/s que el
+hardware permitiría en el mejor de los casos? El paso del Juego de la Vida es un
+\emph{stencil} de 9 puntos sobre celdas de 1~byte: por cada celda se leen sus ocho
+vecinos, se hacen unas pocas sumas enteras y dos comparaciones, y se escribe un
+byte. La razón entre cálculo y tráfico de memoria (la \emph{intensidad aritmética})
+es minúscula, de modo que el factor limitante no es la capacidad de cómputo sino el
+\textbf{ancho de banda de memoria}. Esta sección deriva, desde el hardware del equipo
+de pruebas, una cota superior de rendimiento para cada backend y la cota de
+\emph{speed-up} que de ellas se desprende; las mediciones
+(Secciones~\ref{sec:resultados} y~\ref{sec:analisis}) se interpretan contra ellas.
+
+\subsection{Modelo \emph{roofline}}
+\label{sec:roofline}
+
+Si una generación está limitada por memoria, su tiempo lo fija cuántos bytes deben
+viajar desde/hacia la DRAM, no cuántas operaciones se ejecutan. Sea $B$ el ancho de
+banda sostenido de memoria (bytes/s) y $q$ el tráfico de DRAM por celda y por
+generación (bytes/celda). El número de células evaluadas por segundo no puede
+superar
+%
+\begin{equation}
+	P_{\max} = \frac{B}{q}.
+	\label{eq:roofline}
+\end{equation}
+%
+El valor de $q$ depende del reúso de datos:
+
+\begin{itemize}
+	\item \textbf{Reúso ideal} ($q = 2$): cada celda se trae de la DRAM una sola vez
+	      ---sirve como vecina de sus ocho contiguas desde la caché--- y se escribe
+	      una vez. Es el piso de tráfico: una lectura y una escritura por celda.
+	\item \textbf{Sin caché} ($q \approx 10$): cada hilo \emph{solicita} los nueve
+	      bytes de su vecindario $3\times3$ más la escritura. Es el tráfico que vería
+	      la DRAM si ninguna caché interviniera. En la práctica sí interviene: en la
+	      GPU la L2 sirve casi todas esas solicitudes y devuelve el tráfico real de
+	      DRAM a $q\approx2$ (medido en la Sección~\ref{sec:profiling}).
+\end{itemize}
+
+La cota de cómputo aritmético queda muy por encima: la GTX~1660~Ti entrega
+$1536 \times 2 \times 2{,}1\,\text{GHz} \approx 6{,}5$~TFLOP/s que, repartidos entre
+las $\sim$10 operaciones enteras por celda, darían cientos de Gcélulas/s. El problema
+es, pues, \emph{memory-bound} ---lo limita el sistema de memoria, no la ALU---, si bien
+el perfilamiento (Sección~\ref{sec:profiling}) precisa \emph{qué} parte de ese sistema:
+no la DRAM, sino la tubería en chip (L2/LSU) y la latencia de las cargas.
+
+\subsection{Hardware del equipo de pruebas}
+\label{sec:hw}
+
+La Tabla~\ref{tab:hw} resume los recursos relevantes. Los anchos de banda de memoria
+son los teóricos (de catálogo); la velocidad de la DRAM es la máxima soportada por el
+procesador (DDR4-2666, doble canal).
+
+\begin{table}[H]
+	\centering
+	\caption{Especificaciones del equipo de pruebas que fijan las cotas.}
+	\label{tab:hw}
+	\begin{tabular}{@{}lll@{}}
+		\toprule
+		\textbf{Recurso} & \textbf{Especificación} & \textbf{Magnitud derivada} \\
+		\midrule
+		CPU          & Intel Core i7-9750H, 6C/12T          & 2{,}6--4{,}5 GHz \\
+		L1d / L1i    & 32 KiB / 32 KiB por núcleo           & --- \\
+		L2           & 256 KiB por núcleo (1{,}5 MiB)       & --- \\
+		L3           & 12 MiB compartida                    & --- \\
+		DRAM         & DDR4-2666, doble canal               & $\approx 42{,}7$ GB/s \\
+		GPU          & GTX 1660 Ti (Turing, \texttt{sm\_75}) & 1536 \emph{cores} \\
+		VRAM         & 6 GiB GDDR6, bus 192 bits, 12 Gbit/s/pin & $288$ GB/s \\
+		Caché L2 GPU & 1{,}5 MiB                             & --- \\
+		PCIe         & Gen3 $\times$16                      & $\approx 15{,}8$ GB/s \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\subsection{Cota de la GPU: DRAM, caché L2 y latencia}
+\label{sec:cota-gpu}
+
+La VRAM es GDDR6 sobre un bus de 192 bits a 12~Gbit/s por pin. Como GDDR6 transfiere
+en ambos flancos del reloj (DDR), el reloj de memoria que reporta la GPU
+($6001$~MHz) se duplica a $\sim$12~Gbit/s efectivos por pin, de donde
+%
+\begin{equation}
+	B_{\text{GPU}} = 12\ \tfrac{\text{Gbit}}{\text{s}\cdot\text{pin}} \times
+	\frac{192\ \text{bits}}{8} = 288\ \text{GB/s}.
+	\label{eq:bw-gpu}
+\end{equation}
+%
+El kernel global emite $\sim$10 \emph{solicitudes} de memoria por celda (nueve vecinos
+más la escritura), lo que sugeriría $q\approx10$ y un techo de $\approx28{,}8$~Gcélulas/s
+(fila ``sin caché'' de la Tabla~\ref{tab:cotas}). \textbf{Pero esa lectura es
+engañosa}: hay que separar las \emph{solicitudes} ---que la caché puede absorber--- del
+\emph{tráfico real a DRAM}. El perfilamiento con Nsight Compute
+(Sección~\ref{sec:profiling}) muestra que la L2 sirve el $\sim$88\% de esas
+solicitudes, de modo que la DRAM solo ve $q\approx2$ bytes/celda y queda al
+$\approx20\%$ de su ancho de banda. La cota de DRAM \emph{pertinente} es por tanto la
+de $q=2$, es decir $288/2 = 144$~Gcélulas/s, y el kernel alcanza $\approx28$--$32$, o
+sea solo $\approx20\%$ de ese techo. \textbf{La GPU no está limitada por el ancho de
+banda de DRAM} sino por la tubería de memoria en chip (L2/LSU) y la latencia de uso de
+las cargas: cómputo y tubería de memoria quedan co-limitados al $\sim$65\% de su
+máximo, con la mayoría de los ciclos detenidos esperando los datos de las cargas. El
+recurso que manda es L2, no GDDR6.
+
+\begin{table}[H]
+	\centering
+	\caption{Cotas \emph{roofline} (Ecuación~\ref{eq:roofline}) por backend y modelo
+	de tráfico $q$.}
+	\label{tab:cotas}
+	\begin{tabular}{@{}llll@{}}
+		\toprule
+		\textbf{Backend} & \textbf{$B$} & \textbf{$q$ (B/celda)} & \textbf{$P_{\max}$} \\
+		\midrule
+		GPU --- DRAM con L2 ($q\approx2$, medido) & 288 GB/s    & 2  & 144 Gcélulas/s \\
+		GPU --- sin caché ($q=10$, hipotético)    & 288 GB/s    & 10 & 28{,}8 Gcélulas/s \\
+		CPU --- DRAM ($q=2$)                      & 42{,}7 GB/s & 2  & 21{,}3 Gcélulas/s \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+Esto explica con precisión por qué la \textbf{memoria compartida no puede ayudar} aquí.
+Su único beneficio sería reducir el tráfico de DRAM, pero la L2 ya lo dejó en
+$q\approx2$: el perfilamiento confirma que la versión compartida mueve los mismos
+$\approx2$ bytes/celda a DRAM. A cambio \emph{pierde} el reúso barato de L1 (la tasa de
+acierto cae del $67\%$ al $25\%$, pues las cargas pasan ahora por la memoria compartida)
+y añade una pasada de carga cooperativa y la barrera \texttt{\_\_syncthreads()}. El
+resultado es $\approx1{,}9\times$ más lento pese a una ocupación mayor
+(Sección~\ref{sec:res-opciones}): se quita presión a un recurso (la DRAM) que no era el
+cuello de botella y se añade serialización.
+
+\subsection{Cota de la CPU: memoria contra cómputo}
+\label{sec:cota-cpu}
+
+La DRAM del equipo (DDR4-2666 en doble canal) entrega
+%
+\begin{equation}
+	B_{\text{CPU}} = 2666\ \tfrac{\text{MT}}{\text{s}} \times 8\ \text{B} \times 2\
+	\text{canales} \approx 42{,}7\ \text{GB/s},
+	\label{eq:bw-cpu}
+\end{equation}
+%
+que con $q = 2$ daría una cota de $21{,}3$~Gcélulas/s. Sin embargo, \textbf{esa cota
+no es la que limita a la CPU}, y la razón está en las cachés. El barrido procede fila
+por fila, y una fila solo necesita tres filas del buffer de entrada (la anterior, la
+actual y la siguiente). Para una grilla de $8192$ columnas eso son
+%
+\[
+	3 \times 8192 \times 1\ \text{byte} = 24\ \text{KiB} < 32\ \text{KiB (L1d)},
+\]
+%
+de modo que las tres filas caben en la caché L1 de datos de cada núcleo: tras la
+primera fila, las lecturas del vecindario se sirven desde L1 y la DRAM casi no se
+toca. La CPU no está limitada por ancho de banda sino por \emph{cómputo}: cuántas
+instrucciones (cálculo de índices, ocho lecturas, sumas, el salto de la regla) puede
+retirar cada núcleo por ciclo.
+
+La medición lo confirma: la versión de 12 hilos alcanza $\approx 0{,}16$~Gcélulas/s,
+apenas el $0{,}75\%$ del techo de DRAM. Repartido entre 12 hilos son
+$\sim$12~Mcélulas/s por hilo; a un reloj sostenido de $\sim$3{,}5~GHz eso son unos
+\textbf{300 ciclos por celda}, coherente con un \emph{kernel} escalar, con un salto
+por celda y verificación de bordes, sin vectorizar. La consecuencia para el informe
+es clara: el techo realista de la CPU \emph{tal como está implementada} es del orden
+de $0{,}16$~Gcélulas/s, no los $21$ del límite de memoria; solo una reescritura
+vectorizada (AVX2) y sin saltos se acercaría a ese límite.
+
+\subsection{Transferencias PCIe y el \emph{ping-pong} en el \emph{device}}
+\label{sec:cota-pcie}
+
+El enlace PCIe Gen3 $\times$16 ofrece $\approx 15{,}8$~GB/s teóricos
+($\sim$12~GB/s efectivos). La métrica de esta tarea no lo incluye ---se cronometra
+solo el kernel y se mide con el \texttt{NullRenderer}---, pero su cota justifica una
+decisión de diseño. Si se copiara la grilla entre \emph{host} y \emph{device} en cada
+generación (1 byte/celda, un sentido), el techo sería $\sim$12~Gcélulas/s, por debajo
+de los $\sim$28 que el kernel sostiene; copiar en ambos sentidos lo bajaría a
+$\sim$6. Por eso los motores de GPU mantienen los dos buffers en el \emph{device} y
+hacen ahí el \emph{ping-pong} (Sección~\ref{sec:impl-cuda}): el bus PCIe se cruza solo
+una vez al subir la semilla y otra al bajar el resultado, nunca dentro del bucle de
+medición. (En reposo el enlace negocia Gen1 para ahorrar energía; sube a Gen3 bajo
+carga.)
+
+\subsection{Cota del \emph{speed-up}}
+\label{sec:cota-speedup}
+
+Si \emph{ambos} backends estuvieran limitados por memoria con el mismo $q$, el
+\emph{speed-up} máximo sería exactamente el cociente de anchos de banda:
+%
+\begin{equation}
+	S_{\max} = \frac{B_{\text{GPU}}}{B_{\text{CPU}}} = \frac{288}{42{,}7} \approx 6{,}8.
+	\label{eq:smax}
+\end{equation}
+%
+Este es el \emph{speed-up} ``justo'' que predice el hardware. El valor medido (GPU
+contra 12 hilos) será mucho mayor ---del orden de $200\times$--- precisamente porque
+la CPU \textbf{no} está en su techo de memoria: opera a $\sim$1/150 de él
+(Sección~\ref{sec:cota-cpu}). Es decir, un \emph{speed-up} de $\sim$200$\times$ no
+mide una ventaja de hardware de $200\times$. Conviene matizar: ni la CPU ni la GPU
+saturan su DRAM ---la CPU está limitada por cómputo y la GPU por la latencia de su
+tubería de memoria (Sección~\ref{sec:cota-gpu})---. El $200\times$ refleja, entonces,
+el paralelismo de la GPU ocultando latencia frente a una CPU escalar; el cociente de
+anchos de banda ($\sim$6{,}8$\times$) es solo una referencia de ``qué pasaría si ambos
+saturaran su DRAM''. El informe reporta ambos para no confundir la ventaja de
+ingeniería con la de hardware puro.
+
+\subsection{Validación del modelo}
+\label{sec:cota-validacion}
+
+La Tabla~\ref{tab:validacion} contrasta las cotas con la medición y el perfilamiento
+(Sección~\ref{sec:profiling}). El hallazgo central corrige la intuición inicial: el
+kernel global \textbf{no está limitado por el ancho de banda de DRAM}. La L2 sirve el
+$\sim$88\% de las solicitudes, así que la DRAM solo ve $q\approx2$ B/celda y opera al
+$\approx20\%$ de su capacidad; el kernel alcanza $\approx28$--$32$~Gcélulas/s, apenas
+el $\approx20\%$ de la cota de DRAM de $144$~Gcélulas/s, y su límite real es la tubería
+de memoria en chip y la latencia de las cargas ($\sim$65\% de SOL). La CPU, en cambio,
+se queda $\sim$130$\times$ por debajo de su techo de DRAM ---limitada por cómputo---.
+
+\begin{table}[H]
+	\centering
+	\caption{Cota de DRAM contra medición (mejor configuración). Ninguno satura su DRAM:
+	a la GPU la limita la tubería L2/latencia ($\sim$65\% SOL); a la CPU, el cómputo.
+	$1$~Gcélula/s $=10^{3}$~Mcélulas/s.}
+	\label{tab:validacion}
+	\begin{tabular}{@{}llll@{}}
+		\toprule
+		\textbf{Backend / config.} & \textbf{Cota DRAM} & \textbf{Medido} & \textbf{\% cota} \\
+		\midrule
+		GPU global (DRAM, L2 da $q\approx2$) & 144 Gcél/s    & 25--32 (máx $32{,}1$) Gcél/s & $\approx20\%$ \\
+		CPU, 12 hilos (DRAM, $q=2$)          & 21{,}3 Gcél/s & $\approx 0{,}16$ Gcél/s       & $0{,}75\%$ \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+En suma, el \textbf{máximo obtenible} en este proyecto queda así: la GPU rinde
+$\approx 25$--$32$~Gcélulas/s, no contra el techo de DRAM ($144$) sino contra el de su
+tubería de memoria y latencia. Hay, por tanto, margen ---ocultar mejor la latencia con
+más paralelismo de instrucción (varias celdas por hilo) podría acercarla al techo de
+DRAM---; reducir el tráfico (empaquetar bits) ayudaría poco mientras la DRAM esté al
+$20\%$. La CPU ronda $0{,}16$~Gcélulas/s, dominada por el cómputo, no por la memoria.
+El cociente de anchos de banda ($\sim$6{,}8$\times$) es solo una referencia: ninguno de
+los dos satura su DRAM.
 
 \section{Resultados}
 \label{sec:resultados}
 
-% (2.0 pt)
-%   - Describir experimentos a realizar.
-%   - Resultados por tamaño de cuadrícula (CPU/GPU).
-%   - Resultados de experimentos para las opciones elegidas.
-
-\subsection{Diseño de experimentos}
+\subsection{Configuración experimental}
 \label{sec:experimentos}
 
-Se midió el número de células evaluadas por segundo en grillas cuadradas
-de tamaños $N \in \{128, 256, 512, 1024, 2048, 4096\}$, ejecutando un
-número fijo de generaciones por configuración y promediando varias
-corridas independientes.
+Las mediciones se realizan en un equipo con procesador Intel Core i7-9750H
+(6~núcleos físicos / 12 hilos; L1d de 32~KiB por núcleo, L2 de 1{,}5~MiB y L3 de
+12~MiB) y GPU NVIDIA GeForce GTX~1660~Ti (Turing, capacidad de cómputo $7{.}5$;
+GDDR6 de 192 bits, $288$~GB/s), bajo Linux con CUDA y compilación en C\texttt{++}23.
+
+Los barridos se automatizan con \texttt{scripts/sweep.sh}, que invoca el binario en
+modo CSV y produce dos archivos en \texttt{results/}: uno para el barrido de
+optimizaciones de CUDA (bloque $\times$ memoria compartida) y otro para el
+escalamiento CPU/GPU según el tamaño de grilla; el análisis y las figuras se generan
+con el cuaderno \texttt{analysis/results.ipynb}. Cada configuración se ejecuta varias
+veces y se conserva el \textbf{mejor} tiempo (menor ruido de \emph{turbo} y
+contención); todas las corridas usan el \texttt{NullRenderer} (sin dibujado ni
+transferencias en el lazo cronometrado), bordes acotados y la misma semilla.
+
+Se miden grillas cuadradas $N \in \{64, 128, 256, 512, 1024, 2048, 4096, 8192,
+16384\}$. El número de generaciones se escala con $N$ (muchas para grillas pequeñas,
+pocas para las grandes) de modo que cada corrida sea medible pero acotada. El motor
+de CPU se barre en $\{1,2,4,6,8,10,12\}$ hilos (1 = secuencial) y el de CUDA en
+bloques $\{32,64,128,256,512\}$ con y sin memoria compartida. Antes de los barridos
+se verificó que la GPU operara a plena velocidad (límite de potencia de 60~W, reloj
+de memoria 6001~MHz): un \emph{cap} de potencia rebajaría el ancho de banda efectivo
+e invalidaría la comparación.
 
 \subsection{CPU vs GPU por tamaño de cuadrícula}
 \label{sec:res-cpu-gpu}
 
-Insertar aquí la tabla y gráficos comparativos.
+La Figura~\ref{fig:cpuvsgpu} compara, en ejes log--log, los tres caminos según el
+tamaño de grilla. La CPU secuencial es prácticamente \textbf{plana} en $\approx
+27$~Mcélulas/s: como se anticipó en la Sección~\ref{sec:cota-cpu}, está limitada por
+cómputo, no por memoria. La CPU paralela se estabiliza en $\approx 150$--$160$, y la
+GPU domina por \textbf{dos a tres órdenes de magnitud}, con su máximo ($\approx
+32$~Gcélulas/s) en $N=2048$; más allá decae levemente (efecto de reloj/SOL: el
+perfilamiento muestra que la tasa de acierto de L2 se mantiene en $\approx88\%$ y la
+DRAM al $\approx20\%$ también en $N=8192$). La curva \texttt{CUDA (wall)} incluye el costo de
+lanzamiento por paso: se separa del \texttt{kernel} en grillas pequeñas (la GPU queda
+infrautilizada) y se le junta para $N \gtrsim 2048$.
+
+\insertimage{bench_cpu_vs_gpu}{width=0.86\linewidth}{Rendimiento (Mcélulas/s, ejes
+log--log) según el tamaño de grilla $N$, mejor de las repeticiones. \label{fig:cpuvsgpu}}
+
+\begin{table}[H]
+	\centering
+	\caption{Rendimiento por backend y \emph{speed-up} de la GPU frente a la mejor CPU
+	paralela (mejor de las repeticiones). En $N{=}16384$ la CPU secuencial se omitió
+	por costo (su rendimiento es plano, $\approx 26$~Mcélulas/s).}
+	\label{tab:cpugpu}
+	\begin{tabular}{@{}rrrrr@{}}
+		\toprule
+		$N$ & CPU sec. [Mcél/s] & CPU par. [Mcél/s] & CUDA [Gcél/s] & $S$ (vs par.) \\
+		\midrule
+		256   & 29  & 160 & 12{,}3 & 77  \\
+		1024  & 28  & 160 & 29{,}2 & 183 \\
+		2048  & 27  & 159 & 32{,}1 & 202 \\
+		4096  & 27  & 149 & 30{,}1 & 202 \\
+		8192  & 26  & 154 & 25{,}9 & 168 \\
+		16384 & --- & 159 & 24{,}8 & 157 \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\paragraph{Escalamiento en CPU.} La Figura~\ref{fig:cputhreads} muestra el
+rendimiento de la CPU según el número de hilos. El reparto por bandas de filas escala
+\textbf{casi linealmente hasta los 6 núcleos físicos} ($\approx 5{,}4\times$ con 6
+hilos); el \emph{hyperthreading} aporta poco ($12$ hilos $\approx 5{,}9\times$),
+coherente con un problema limitado por cómputo. El detalle notable es la \textbf{caída
+no monótona en 8 y 10 hilos}: con 8 hilos, 2 de los 6 núcleos ejecutan 2 hilos HT
+(cada uno $\sim 0{,}65\times$) y 4 ejecutan 1; como la \texttt{std::barrier} sincroniza
+cada generación, el paso espera al hilo más lento y los núcleos con HT se vuelven el
+cuello de botella. Con 12 hilos todos quedan igualmente cargados y el rendimiento se
+recupera. (No es térmico: el calentamiento haría caer también a 10 y 12 hilos.)
+
+\insertimage{bench_cpu_threads}{width=0.82\linewidth}{Rendimiento de la CPU
+(Mcélulas/s) según el número de hilos; la recta punteada es el escalamiento lineal
+ideal. \label{fig:cputhreads}}
 
 \subsection{Resultados de las opciones elegidas}
 \label{sec:res-opciones}
 
-Insertar aquí las curvas para cada tamaño de bloque y para la comparación
-con/sin memoria local.
+La Figura~\ref{fig:blockshared} reúne las dos optimizaciones. La curva por
+\textbf{tamaño de bloque} es cóncava: con 32 hilos hay muy pocos \emph{warps} por SM
+para ocultar la latencia de memoria, y con 512 la ocupación cae; el óptimo está en
+\textbf{64--128} hilos. La \textbf{memoria compartida} (líneas discontinuas) queda
+\emph{sistemáticamente por debajo} de la versión global ---en torno a $0{,}55\times$
+su rendimiento--- confirmando la predicción del modelo (Sección~\ref{sec:cota-gpu}):
+para un \emph{stencil} de 1 byte la caché L2 ya sirve la reutilización, y la barrera,
+el halo y los accesos byte-a-byte a la SRAM cuestan más de lo que ahorran. La
+Tabla~\ref{tab:opt} resume el mejor bloque por $N$.
+
+\insertimage{bench_block_shared}{width=0.86\linewidth}{CUDA: rendimiento (Gcélulas/s)
+por tamaño de bloque, memoria global (sólido) frente a compartida (discontinuo), para
+varias grillas. \label{fig:blockshared}}
+
+\begin{table}[H]
+	\centering
+	\caption{Mejor configuración global frente a compartida (Gcélulas/s; el mejor
+	tamaño de bloque se indica entre paréntesis).}
+	\label{tab:opt}
+	\begin{tabular}{@{}rccc@{}}
+		\toprule
+		$N$ & global (mejor blq.) & compartida (mejor blq.) & global/compartida \\
+		\midrule
+		1024  & 31{,}7 (64/128) & 17{,}9 (128) & 1{,}77 \\
+		2048  & 34{,}9 (128)    & 18{,}9 (128) & 1{,}85 \\
+		4096  & 29{,}8 (128)    & 15{,}2 (256) & 1{,}96 \\
+		8192  & 26{,}2 (64)     & 13{,}6 (128) & 1{,}93 \\
+		16384 & 24{,}8 (128)    & 13{,}5 (128) & 1{,}84 \\
+		\bottomrule
+	\end{tabular}
+\end{table}
 
 \section{Análisis de resultados}
 \label{sec:analisis}
 
-% (1.5 pt)
-%   - Speed-up comparando versiones paralelas con CPU.
-%   - Calcular desde qué tamaño de cuadrícula conviene usar la GPU.
-
 \subsection{Speed-up}
 \label{sec:speedup}
 
-Reportar $S(N) = T_{\text{CPU}}(N) / T_{\text{GPU}}(N)$ para cada
-configuración.
+El \emph{speed-up} (Ecuación~\ref{eq:speedup}, panel izquierdo de la
+Figura~\ref{fig:speedup}) alcanza $\approx 1200\times$ frente a la versión secuencial
+y $\approx 200\times$ frente a la mejor CPU paralela, con su máximo en
+$N=2048$--$4096$. Conviene leer ambos números junto con la cota de la
+Sección~\ref{sec:cota-speedup}: el cociente ``limpio'' de anchos de banda predice
+$\approx 6{,}8\times$, y el $\sim 200\times$ medido es mucho mayor porque la CPU base
+no está en su techo de memoria (opera a $\sim 1/150$ de él), no porque el hardware de
+la GPU sea $200\times$ superior. El $\sim 200\times$ mezcla, entonces, la ventaja real
+de ancho de banda de la GPU con la inmadurez de la CPU escalar de referencia.
+
+\insertimage{bench_speedup}{width=\linewidth}{Izquierda: \emph{speed-up} de la GPU
+frente a la CPU secuencial y a la mejor paralela. Derecha: eficiencia
+\texttt{wall/kernel} (peso del \emph{overhead} de lanzamiento); la banda señala la
+rodilla $N\approx 1024$--$2048$. \label{fig:speedup}}
 
 \subsection{Umbral de conveniencia GPU}
 \label{sec:umbral}
 
-Identificar el tamaño de grilla a partir del cual $S(N) > 1$ de manera
-sostenida.
+El panel derecho de la Figura~\ref{fig:speedup} muestra la eficiencia
+\texttt{wall/kernel}, que mide el peso del \emph{overhead} de lanzamiento por paso:
+sube de $\approx 40\%$ en $N=64$ a $\approx 98\%$ en $N \gtrsim 2048$, de modo que la
+\textbf{rodilla} de conveniencia está en $N \approx 1024$--$2048$. Por debajo, la GPU
+está infrautilizada (pocos bloques para llenar los 24 SM) y el lanzamiento domina; por
+encima, el kernel satura el bus.
+
+Cabe una precisión sobre el umbral clásico ``a partir de qué $N$ conviene la GPU''.
+Con esta metodología ---cronometraje de kernel/lazo con \texttt{NullRenderer}, que
+\emph{excluye} las transferencias--- la GPU supera a la CPU en \emph{todo} el rango
+medido, incluso en $N=64$: su único costo es el lanzamiento y la CPU base es débil. Un
+umbral por debajo del cual convenga la CPU solo aparece al contabilizar el costo PCIe
+de subir/bajar la grilla (Sección~\ref{sec:cota-pcie}): transferir la grilla en cada
+generación acotaría la GPU a $\sim 12$~Gcélulas/s ---en la práctica $\sim$8, medido en
+la Sección~\ref{sec:profiling}---, y para grillas muy pequeñas el costo
+fijo de transferencia la haría perder frente a la CPU.
 
 \subsection{Perfilamiento (Nsight / Chrono)}
 \label{sec:profiling}
 
-Describir hallazgos del \emph{profiling} de la mejor solución CUDA con
-Nsight (o Nvprof) y de la mejor solución OpenCL con \texttt{std::chrono}.
+Se perfiló la mejor solución CUDA (memoria global, bloque 128) con Nsight Systems
+(línea de tiempo) y Nsight Compute (contadores internos del kernel). Estas
+herramientas \emph{no} producen los números de rendimiento ---esos vienen del
+cronometraje en programa--- sino que explican \emph{por qué} el kernel rinde lo que
+rinde.
+
+\paragraph{Nsight Systems (\texttt{nsys}).} Sobre $200$ generaciones en $8192^2$, cada
+lanzamiento de \texttt{lifeGlobal} dura $\approx2{,}3$--$2{,}6$~ms (los $\approx28$
+Gcélulas/s ya medidos). El costo de \emph{host} por paso ---\texttt{cudaLaunchKernel}
+($\approx15\,\mu\mathrm{s}$) más los dos \texttt{cudaEventRecord}
+($\approx5\,\mu\mathrm{s}$ c/u)--- suma $\sim$25--30~$\mu\mathrm{s}$: despreciable
+frente al kernel en grillas grandes ($0{,}1\%$) pero dominante en las pequeñas, lo que
+explica la rodilla de eficiencia de la Sección~\ref{sec:umbral}. La única
+transferencia, la subida inicial de $67$~MB, tardó $8{,}0$~ms, esto es
+\textbf{$8{,}4$~GB/s} ---por debajo del límite del enlace porque el buffer de
+\emph{host} es \emph{pageable} (un \texttt{std::vector})---. Esto refina la
+Sección~\ref{sec:cota-pcie}: transferir cada generación acotaría la GPU a
+$\sim$8~Gcélulas/s (no $\sim$12), reforzando la decisión de hacer el \emph{ping-pong}
+en el \emph{device}.
+
+\paragraph{Nsight Compute (\texttt{ncu}).} Es el hallazgo que corrige el modelo. La
+Tabla~\ref{tab:ncu} resume las métricas del kernel global y del de memoria compartida
+(bloque 128, $N=4096$; el cuadro es idéntico en $8192$). Tres lecturas:
+
+\begin{itemize}
+	\item \textbf{El kernel global no está limitado por DRAM.} La L2 acierta el
+	      $88\%$ de las solicitudes, así que la DRAM solo mueve $\approx2$ bytes/celda
+	      y queda al $\approx20\%$. Cómputo y tubería de memoria están co-limitados al
+	      $\sim$66\% de SOL, y el $\sim$54\% de los ciclos se detiene esperando los
+	      datos de las cargas (\emph{long scoreboard}): el kernel es
+	      \textbf{latency-bound sobre cargas servidas por caché}, no
+	      \emph{bandwidth-bound} sobre DRAM.
+	\item \textbf{Por qué pierde la memoria compartida.} Mueve los mismos $\approx2$
+	      bytes/celda a DRAM (no gana nada ahí), pero su acierto en L1 se desploma del
+	      $67\%$ al $25\%$ (las cargas pasan ahora por la memoria compartida) y paga la
+	      carga cooperativa y la barrera. Acaba $\approx1{,}9\times$ más lenta
+	      \emph{pese} a una ocupación mayor ($91\%$ vs.\ $82\%$).
+	\item \textbf{La ocupación no es el límite.} Ambos kernels superan el $80\%$ de
+	      ocupación alcanzada; más hilos no ayudarían. Esto cierra el porqué de la
+	      meseta del tamaño de bloque (Sección~\ref{sec:res-opciones}).
+\end{itemize}
+
+\begin{table}[H]
+	\centering
+	\caption{Nsight Compute: kernel global \emph{vs.}\ compartido (bloque 128, $N=4096$).}
+	\label{tab:ncu}
+	\begin{tabular}{@{}lrr@{}}
+		\toprule
+		\textbf{Métrica} & \textbf{global} & \textbf{compartida} \\
+		\midrule
+		Rendimiento [Gcélulas/s]        & 28{,}0  & 14{,}8 \\
+		Tráfico de DRAM [B/celda]       & 2{,}0   & 2{,}0  \\
+		Uso de DRAM [\% del pico]       & 19{,}7  & 10{,}4 \\
+		Acierto de L2 [\%]              & 87{,}9  & 87{,}4 \\
+		Acierto de L1/TEX [\%]          & 67{,}0  & 24{,}9 \\
+		SOL cómputo / memoria [\%]      & 66 / 66 & 62 / 45 \\
+		Ocupación alcanzada [\%]        & 81{,}7  & 90{,}7 \\
+		\emph{Stall} dominante          & scoreboard ($54\%$) & scoreboard + barrera \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+El perfilamiento de OpenCL con \texttt{std::chrono} queda pendiente junto con ese
+backend.
 
 \section{Conclusiones}
 \label{sec:conclusiones}
 
-% (1.0 pt)
+Se implementaron y compararon tres caminos del Juego de la Vida con la regla variante
+\texttt{B36/S23}: CPU secuencial, CPU paralela y CUDA (OpenCL queda pendiente). Los
+hallazgos principales:
 
-Resumir los principales hallazgos y limitaciones encontradas.
+\begin{itemize}
+	\item \textbf{Memoria compartida contraproducente.} Para un \emph{stencil} de 1
+	      byte, la versión con memoria compartida rinde $\approx 0{,}55\times$ la
+	      global: la caché L2 ya captura la reutilización y la barrera/halo no se
+	      amortizan. Esto valida el análisis \emph{roofline}.
+	\item \textbf{Tamaño de bloque.} Óptimo en 64--128 hilos, con curva cóncava por
+	      ocupación.
+	\item \textbf{CPU.} Escala hasta los 6 núcleos físicos ($\approx 5{,}4\times$); el
+	      \emph{hyperthreading} aporta poco y, por la sincronización con barrera,
+	      desbalancea en 8 y 10 hilos.
+	\item \textbf{GPU.} $\approx 32$~Gcélulas/s. El perfilamiento revela que \emph{no}
+	      la limita el ancho de banda de DRAM (al $\approx20\%$, pues la L2 sirve el
+	      $88\%$ de las solicitudes) sino la tubería L2/LSU y la latencia ($\sim$65\%
+	      de SOL); hay margen de mejora con más paralelismo de instrucción.
+	\item \textbf{Speed-up.} Hasta $\approx 200\times$ sobre la mejor CPU paralela y
+	      $\approx 1200\times$ sobre la secuencial; la cota ``limpia'' de hardware es
+	      $\approx 6{,}8\times$, y la diferencia se explica por una CPU base no
+	      vectorizada.
+\end{itemize}
+
+\textbf{Limitaciones y trabajo futuro.} Falta el backend OpenCL y el perfilamiento con
+Nsight (Sección~\ref{sec:profiling}); la disposición de 1 byte por celda fija el techo
+de la GPU (empaquetar bits lo elevaría) y la CPU se beneficiaría de una reescritura
+vectorizada (AVX2) sin saltos.
 
 % FIN DEL DOCUMENTO
 \end{document}

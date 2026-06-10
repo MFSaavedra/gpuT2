@@ -30,10 +30,12 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   cells read as squares despite the ~1:2 terminal cell aspect ratio; glyph fields are `std::string`
   (configurable). `AnsiRenderer` clips by per-cell display width (2 cols/cell), not raw column count.
   On a TTY it is **interactive**: arrow keys pan the viewport over a grid larger than the screen,
-  `space`/`p` pauses (the sim halts but you can still pan), and `q` quits (via `shouldClose()`). It
-  uses raw, non-blocking input and restores the terminal on exit and on SIGINT/SIGTERM. Pause is
-  contained in `render()` (a `do/while`), so the main loop/engine/interface are untouched; piped
-  (non-TTY), the controls are disabled and the top-left window is shown.
+  `space`/`p` pauses (the sim halts but you can still pan), and `q` quits (via `shouldClose()`).
+  Scrollbars (`┃`/`━` thumbs along the right/bottom edges) show the scroll position when clipped, and
+  the viewer **holds on the final frame until `q`** (via `staysOpen()`). It uses raw, non-blocking
+  input and restores the terminal on exit and on SIGINT/SIGTERM. Pause is contained in `render()` (a
+  `do/while`), so the main loop/engine/interface are untouched; piped (non-TTY), the controls are
+  disabled, `staysOpen()` is false, and the top-left window is shown once.
 - **App** — `main.cpp` owns the loop, wires a CPU engine + renderer, seeds from RLE or a deterministic
   random fill, and prints kernel/wall cells-per-second.
 
@@ -44,6 +46,14 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   `nextState` from `LifeRules.hpp` verbatim. Verified **bit-for-bit against the `CpuEngine` oracle**
   across block sizes, shared/global, and both edge modes (`cuda_equivalence_test.cpp`). Opt-in via
   `-DBUILD_CUDA=ON`; targets `sm_75` (GTX 1660 Ti) with `-lineinfo` for `ncu`.
+
+- **Benchmarks** — run. `scripts/sweep.sh` drives the CPU(threads) + CUDA(block×shared) sweeps to
+  `results/sweep_*.csv`; `analysis/results.ipynb` (Spanish) plots them to `report/img/bench_*.png`.
+  Headline: CUDA peaks ~32 Gcells/s, ~200× over the best parallel CPU; **shared memory is slower**
+  (~0.55×) and block 64–128 is optimal. `ncu` corrected the roofline: the kernel is **not** DRAM-bound —
+  L2 serves ~88% of requests so DRAM sees ~2 B/cell at ~20% util; it's latency/L2-pipe-bound (~65% SOL).
+  `nsys`: ~30 µs/step launch overhead, H2D 8.4 GB/s (pageable `std::vector`). Report Resultados/Análisis,
+  §Cotas, and §Perfilamiento are filled from this (`results/profiling/*.ncu-rep`).
 
 Still greenfield: OpenCL (`OpenCLEngine`) — no device source yet, so `--engine opencl` errors (and is
 omitted from a build without `-DBUILD_OPENCL=ON`). GPU CMake targets are opt-in and double-gated (the
@@ -98,7 +108,8 @@ Interfaces:
 - `ISimEngine`: `upload(const Grid&)`, `step()`, `download(Grid&)`, `lastKernelMillis() const`,
   `name() const`, virtual dtor. CUDA/OpenCL engines own their device buffers and do the double-buffer
   ping-pong internally (read A -> write B -> swap).
-- `IRenderer`: `render(const Grid&, uint64_t gen)`, `shouldClose() const = false`. `NullRenderer` does
+- `IRenderer`: `render(const Grid&, uint64_t gen)`, `shouldClose()`/`staysOpen()` (both default false).
+  `NullRenderer` does
   nothing — **always benchmark against it** so render/print cost never pollutes cells/sec. `TextRenderer`
   appends each frame (scrolls); `AnsiRenderer` redraws in place via ANSI escapes and clips to the
   terminal viewport (it never wraps, since a wrapped row would desync its cursor-home math).
@@ -133,7 +144,9 @@ src/render/    TextRenderer.cpp AnsiRenderer.cpp           (NullRenderer is head
 src/patterns/  Pattern.cpp RleLoader.cpp
 tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp
 patterns/      *.rle                                       (block, blinker, birth_on_six, highlife_replicator, highlife_spaceship)
-               (analysis/ *.ipynb results/*.csv — later)
+scripts/       sweep.sh                                    (CPU+CUDA benchmark sweeps -> results/*.csv)
+results/       sweep_cuda_opt.csv sweep_scaling.csv         (Pandas-ready sweep data)
+analysis/      results.ipynb                               (loads results/, writes report/img/bench_*.png)
 ```
 
 Per the report plan (`report/main.tex`), the two kernel-config variations to benchmark are block sizes
@@ -164,11 +177,11 @@ Deep-dive on the *best* parallel solution only:
   CUDA/OptiX only; it will **not** profile OpenCL.
 - **Nsight Systems (`nsys`)** — system/timeline view; can also trace OpenCL on NVIDIA hardware.
 
-Analysis to keep in mind: this is a memory-bound, arithmetically trivial 9-point stencil over 1-byte
-cells. Block size should give a concave curve plateauing by ~128-256; shared memory may give little or
-even negative gain because the 1-byte stencil already lives in cache — the *why* is the interesting
-part of the report. None of the optimizations help at small grids (launch/transfer overhead dominates),
-so run the sweeps at large N x M.
+Analysis (now measured + profiled): this is a memory-bound, arithmetically trivial 9-point stencil over
+1-byte cells. Measured: block size is concave, peaking at **64-128**; shared memory **hurts** (~0.55x)
+because L2 already serves the reuse. `ncu` refined the picture — the global kernel is **not**
+DRAM-bandwidth-bound (DRAM at ~20%, q≈2 B/cell via 88% L2 hit) but **latency / L2-pipe-bound** (~65% SOL).
+Launch/transfer overhead dominates only at small grids, so run the sweeps at large N x M.
 
 ## Tests
 

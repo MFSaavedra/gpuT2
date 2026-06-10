@@ -37,6 +37,16 @@ public:
    * @return true to ask the main loop to stop; false to continue.
    */
   virtual bool shouldClose() const { return false; }
+
+  /**
+   * @brief Whether the app should keep displaying the final frame after the run,
+   *        until shouldClose(), so an interactive viewer can be explored.
+   *
+   * Non-interactive renderers keep the default (false), so the app exits when the
+   * generation loop ends.
+   * @return true to hold on the final frame; false to exit when the run finishes.
+   */
+  virtual bool staysOpen() const { return false; }
 };
 
 } // namespace gol

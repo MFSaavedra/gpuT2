@@ -47,14 +47,15 @@ endif()
 add_library(gol_render ${GOL_RENDER_SOURCES})
 target_link_libraries(gol_render PUBLIC gol_core)
 # ----------------------------------------------------------------------------
-# Application: owns the loop and wires a chosen engine + renderer (CPU + null/text
-# today). Builds and runs with no CUDA toolkit and no OpenCL present.
+# Application: owns the loop and wires a chosen engine + renderer. Base build is the
+# CPU engine + null/text/ansi renderers; the CUDA engine links in under -DBUILD_CUDA=ON.
+# Builds and runs with no CUDA toolkit and no OpenCL present.
 # ----------------------------------------------------------------------------
 add_executable(gol src/core/main.cpp)
 target_link_libraries(gol PRIVATE gol_core gol_cpu gol_render)
 
 # ----------------------------------------------------------------------------
-# Optional CUDA engine (opt-in, and only once its sources exist).
+# Optional CUDA engine (opt-in; double-gated on BUILD_CUDA and the source existing).
 # ----------------------------------------------------------------------------
 option(BUILD_CUDA "Build the CUDA engine" OFF)
 if(BUILD_CUDA)

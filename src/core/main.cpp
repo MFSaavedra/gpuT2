@@ -242,6 +242,14 @@ int main(int argc, char** argv) {
 
     const double totalMs = totalTimer.elapsedMillis();
 
+    // Interactive viewers (AnsiRenderer on a TTY) hold on the final frame, still
+    // accepting pan/pause input, until the user quits. Non-interactive renderers
+    // report staysOpen() == false, so this is skipped (and never hangs a pipe).
+    if (rendering && renderer->staysOpen()) {
+      while (!renderer->shouldClose()) renderer->render(grid, cfg.generations);
+    }
+    renderer.reset(); // destroy the renderer now -> restores the terminal before the summary
+
     // Headline metric: cells evaluated per second = rows * cols * gens / time.
     const double cells = static_cast<double>(cfg.rows) * static_cast<double>(cfg.cols) *
                          static_cast<double>(cfg.generations);

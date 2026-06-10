@@ -66,7 +66,8 @@
 	speed is the real result}), and then walks the source code function by
 	function, with the C\texttt{++} files explained line by line. At the time
 	of writing the CPU backend is complete and acts as the correctness
-	oracle; the CUDA and OpenCL backends are scaffolded but not yet
+	oracle; the CUDA backend is also complete (verified bit-for-bit against it).
+		The OpenCL backend is scaffolded but not yet
 	implemented. The headline metric is fixed throughout:
 	$\text{Mcells/s} = (\text{rows}\times\text{cols}\times\text{gens}) /
 	(t \times 10^{6})$, measured against a no-op renderer so that rendering
@@ -162,10 +163,10 @@ the per-generation compute --- sits behind \texttt{ISimEngine}; output sits
 behind \texttt{IRenderer}; the application owns the loop and wires one of each at
 runtime from the parsed configuration.
 
-\begin{sourcecode}{plaintext}{The strategy layout. Parenthesised backends are scaffolded, not yet implemented.}
+\begin{sourcecode}{plaintext}{The strategy layout. Parenthesised backends/renderers are scaffolded or planned.}
 Application (main.cpp)  -- owns the loop + Config/CLI
-  |-- ISimEngine   <- CpuEngine | (CudaEngine) | (OpenCLEngine)
-  |-- IRenderer    <- NullRenderer | TextRenderer | (GuiRenderer later)
+  |-- ISimEngine   <- CpuEngine | CudaEngine | (OpenCLEngine)
+  |-- IRenderer    <- NullRenderer | TextRenderer | AnsiRenderer | (GuiRenderer later)
   '-- Grid + Pattern  (shared, backend-agnostic state & seed data)
 \end{sourcecode}
 
@@ -176,9 +177,10 @@ single host-side harness drive all three engines. The link graph is:
 \begin{sourcecode}{plaintext}{Library dependency graph (CMake targets).}
 gol_core  (Grid, Config+CLI, patterns, RLE, interfaces)
    |-- gol_cpu     (CpuEngine; links Threads::Threads)
-   |-- gol_render  (TextRenderer)
-   '-- (gol_cuda, gol_opencl -- opt-in, not yet present)
-gol  executable  =  gol_core + gol_cpu + gol_render
+   |-- gol_render  (TextRenderer, AnsiRenderer)
+   |-- gol_cuda    (CudaEngine; opt-in, -DBUILD_CUDA=ON)
+   '-- (gol_opencl -- opt-in, not yet present)
+gol  executable  =  gol_core + gol_cpu + gol_render (+ gol_cuda when built)
 \end{sourcecode}
 
 The UML class diagram in Figure \ref{fig:uml} renders these relationships
@@ -234,6 +236,8 @@ and impose no link dependency.
 		\texttt{src/render/AnsiRenderer.cpp}     & In-place ANSI animation & \ref{sec:render} \\
 		\texttt{CMakeLists.txt}                  & Build, GPU opt-in gating & \ref{sec:cmake} \\
 		\texttt{tests/*.cpp}                     & Executable spec of the invariants & \ref{sec:tests} \\
+		\texttt{scripts/sweep.sh}                & Benchmark sweeps $\to$ \texttt{results/*.csv} & \ref{sec:timing} \\
+		\texttt{analysis/results.ipynb}          & Plots the sweeps (Spanish) & \ref{sec:timing} \\
 		\bottomrule
 	\end{tabular}
 \end{table}
@@ -294,9 +298,10 @@ equivalence requirement:
 	      $8\times$ smaller and use less bandwidth, but it would turn the
 	      neighbour read into a bit-extraction and make the three backends harder
 	      to keep identical. The project accepts the $8\times$ memory cost to keep
-	      the stencil a plain array read. This is also \emph{why} shared memory is
-	      expected to help little on the GPU (Section \ref{sec:timing}): a
-	      one-byte stencil already fits comfortably in cache.
+	      the stencil a plain array read. This is also \emph{why} shared memory
+	      \emph{hurts} rather than helps on the GPU (Section \ref{sec:timing}): the
+	      one-byte stencil's reuse is already served by L2, so explicit staging only adds a
+		barrier and loses L1 reuse.
 	\item \textbf{\texttt{at(x,y)} is unchecked.} The simulation hot path
 	      evaluates this billions of times; a bounds branch per access would be a
 	      measurable tax on a memory-bound kernel. Bounds are the caller's
@@ -414,6 +419,7 @@ public:
   virtual ~IRenderer() = default;
   virtual void render(const Grid& grid, std::uint64_t generation) = 0;
   virtual bool shouldClose() const { return false; } // interactive renderers override
+  virtual bool staysOpen()  const { return false; }  // hold final frame until quit?
 };
 \end{sourcecode}
 
@@ -582,6 +588,12 @@ for (std::uint64_t gen = 0; gen < cfg.generations; ++gen) {
   }
 }
 const double wallMs = wall.elapsedMillis();
+
+// Interactive viewers hold on the final frame until the user quits; staysOpen()
+// is false for Null/Text, so this is skipped (and never hangs a pipe).
+if (rendering && renderer->staysOpen())
+  while (!renderer->shouldClose()) renderer->render(grid, cfg.generations);
+renderer.reset(); // restore the terminal before printing the summary
 
 const double cells = (double)cfg.rows * (double)cfg.cols * (double)cfg.generations;
 auto mcellsPerSec = [cells](double ms) {
@@ -877,9 +889,9 @@ worker runs, which is why they stay in lockstep generation after generation. The
 \texttt{cur\_}.
 
 \texttt{download} copies the current buffer into the caller's grid. On the CPU
-this is the ``no-op cost'' the interface mentions --- a host copy; on the GPU
-backends this same method will be the device$\rightarrow$host transfer, which is
-precisely why it is excluded from the benchmark.
+this is the ``no-op cost'' the interface mentions --- a host copy; on the CUDA
+backend this same method is the device$\rightarrow$host transfer
+(\texttt{cudaMemcpy} D2H), which is precisely why it is excluded from the benchmark.
 
 \paragraph{What would break.} Remove the \texttt{stop\_} check and the destructor
 deadlocks. Swap the order of ``publish \texttt{src\_/dst\_}'' and ``phase-1
@@ -1149,6 +1161,22 @@ terminal is restored on destruction \emph{and} from a
 when stdin is not a TTY, the controls are disabled and the top-left window is
 shown.
 
+\paragraph{Scrollbars.} To show \emph{where} the viewport sits, the renderer
+draws a scrollbar in each clipped direction: a vertical bar in the rightmost
+column (a heavy solid thumb, U+2503, over a dotted track, U+250A) and a
+horizontal bar in a row under the grid (heavy U+2501 over dotted U+2508) --- the
+solid thumb stands out against the dotted rail. Each is shown only when the grid
+is clipped that way (one row/column is reserved for it). A shared helper
+maps the visible band onto the bar --- the thumb length is the visible fraction
+($\approx$ len\,$\times$\,visible\,/\,total) and its position tracks the offset
+--- so the bar reads like any GUI scrollbar.
+
+\paragraph{Holding after the run.} \texttt{staysOpen()} returns
+\texttt{interactive\_}, so once the generation loop ends the application keeps
+calling \texttt{render()} on the final board (still panning/pausing) until
+\texttt{q}. Piped output reports \texttt{staysOpen() == false}, so a non-TTY run
+exits normally and never hangs.
+
 \paragraph{Robustness details.} A per-frame \texttt{\textbackslash 033[?2026h/l}
 pair asks the terminal for a \emph{synchronized} (tear-free) update and is
 silently ignored where unsupported; \texttt{\textbackslash 033[K} wipes any
@@ -1249,9 +1277,11 @@ for (unsigned threads : {2u, 3u, 4u, 8u, 0u /* all hw cores */}) {
 }
 \end{sourcecode}
 
-\paragraph{The fourth test is still pending.} \emph{Cross-backend equivalence} ---
-seed CPU/CUDA/OpenCL identically, run $N$ generations, assert bit-for-bit
-equality against the \texttt{CpuEngine} oracle --- waits on the GPU engines. An
+\paragraph{The fourth test: cross-backend equivalence.} \emph{Done for CUDA,
+pending for OpenCL.} \texttt{cuda\_equivalence\_test.cpp} seeds CUDA and the
+\texttt{CpuEngine} oracle identically and asserts bit-for-bit equality across block
+sizes $\{32,64,128,256\}$, both kernels (global/shared) and both edge modes; OpenCL
+will follow the same pattern. An
 external oracle is also available: the headless \texttt{bgolly} runner simulates
 \texttt{B36/S23} on an infinite grid, and the \texttt{highlife\_replicator.rle} /
 \texttt{highlife\_spaceship.rle} fixtures already reproduce it bit-for-bit, so
@@ -1283,7 +1313,10 @@ For the sweep data the binary has a CSV mode: \texttt{--csv} prints one data row
 (columns \texttt{backend, rows, cols, generations, threads, block, shared, wrap,
 kernel\_ms, wall\_ms, mcells\_kernel, mcells\_wall}) and \texttt{--csv-header}
 prints just the header and exits, so a script writes the header once and appends
-a row per configuration straight into Pandas. The speed-up is
+a row per configuration straight into Pandas. In practice that script is
+\texttt{scripts/sweep.sh} (the CPU-threads and CUDA block\,$\times$\,shared sweeps,
+with an adaptive-repeats runtime guard), and \texttt{analysis/results.ipynb} turns
+the resulting \texttt{results/*.csv} into the report's figures. The speed-up is
 
 \begin{equation}
 	S(N) = \frac{T_{\text{CPU}}(N)}{T_{\text{GPU}}(N)}.
@@ -1292,27 +1325,31 @@ a row per configuration straight into Pandas. The speed-up is
 \subsection{What the numbers should show, and why}
 
 This is a memory-bound, arithmetically trivial nine-point stencil over one-byte
-cells. That single fact predicts the shape of every curve the report will
-produce:
+cells. That single fact predicts the shape of every curve the report measures
+(and the profiling then refines):
 
-\paragraph{Block size gives a concave curve that plateaus by 128--256.} Below
+\paragraph{Block size gives a concave curve peaking at 64--128.} Below
 that, blocks are too small to hide memory latency (too few warps in flight to
-cover the stalls of a bandwidth-bound kernel); past it, more threads per block do
-not buy more effective bandwidth, so the curve flattens. The mechanism is
-occupancy versus available memory throughput, not arithmetic.
+cover the load-use stalls); past it, more threads per block do not buy more
+occupancy, so the curve flattens and then falls (512). The mechanism is occupancy
+and latency-hiding, not arithmetic --- the profiling confirms the kernel is
+latency-bound on cache-served loads, not bandwidth-bound on DRAM.
 
-\paragraph{Shared/local memory may give little or even negative gain.} The
+\paragraph{Shared/local memory loses here.} The
 classic stencil optimisation stages a tile plus a halo into shared memory to
-reuse neighbour reads. Here each cell is one byte, so the working set of a tile
-already lives in L1/L2; the explicit staging adds index arithmetic and a barrier
-without saving meaningful DRAM traffic, and can lose. Explaining \emph{why} this
-optimisation underperforms is one of the more interesting parts of the report.
+reuse neighbour reads. Here each cell is one byte and the L2 already serves the
+reuse, so the staging saves no DRAM traffic ($\approx 2$ B/cell either way) while
+adding a barrier and dropping L1 reuse --- it runs $\approx 0.55\times$ the global
+kernel. Explaining \emph{why} is one of the more interesting parts of the report.
 
-\paragraph{No optimisation helps at small grids.} Kernel-launch and transfer
-overhead dominate when there are few cells, so $S(N) < 1$ for small $N$ and the
-CPU is competitive or faster. The sweeps must therefore run at large $N\times M$
-to see the GPU win. Identifying the threshold $N$ where $S(N) > 1$ sustainably is
-a graded deliverable.
+\paragraph{Launch overhead dominates at small grids.} With few cells there are too
+few blocks to fill the SMs, so per-step launch cost dominates: the GPU's
+\texttt{wall}/\texttt{kernel} efficiency falls (to $\approx 40\%$ at $N=64$),
+recovering by $N\approx 1024$--$2048$. Because the metric times the kernel/loop with
+the \texttt{NullRenderer} (transfers excluded), the GPU still outruns the
+compute-bound CPU at every measured $N$; a classic $S(N) < 1$ regime appears only
+once the PCIe transfer cost is counted. The sweeps therefore run from small to large
+$N\times M$ to expose both the efficiency knee and the asymptote.
 
 The deep-dive profiling targets the \emph{best} parallel solution only:
 \texttt{ncu} (Nsight Compute) for CUDA kernel-internal metrics --- occupancy,
@@ -1329,13 +1366,14 @@ parallel in one path), both renderers, the RLE pipeline, the CLI, and the
 cudaEvent timing), and the CSV benchmark-output mode
 (\texttt{--csv}/\texttt{--csv-header}). Test suites: CPU rules,
 sequential-vs-parallel, RLE loader, and the CUDA-vs-CPU cross-backend
-equivalence (Section \ref{sec:cuda}). The CPU engine is the reference oracle.
+equivalence (Section \ref{sec:cuda}). The CPU engine is the reference oracle. The
+benchmark sweeps (\texttt{scripts/sweep.sh}), the results CSVs, the analysis notebook
+(\texttt{analysis/results.ipynb}), and the Nsight (\texttt{ncu}/\texttt{nsys})
+profiling of the best CUDA kernel are also done and populate \texttt{main.tex}.
 
-\paragraph{Pending.} \texttt{OpenCLEngine} (\texttt{src/engines/opencl/}) and its
-cross-backend test; the sweep scripts; and the benchmark runs, results CSVs, and
-analysis notebooks that populate \texttt{main.tex} (including the Nsight deep-dive
-on the best CUDA
-config).
+\paragraph{Pending.} \texttt{OpenCLEngine} (\texttt{src/engines/opencl/}), its
+cross-backend equivalence test, and its \texttt{std::chrono} profiling --- the only
+remaining backend.
 
 \paragraph{How a GPU backend slots in.} Implement \texttt{ISimEngine}: own two
 device buffers, \texttt{upload} once, ping-pong on the device inside
