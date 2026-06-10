@@ -961,6 +961,83 @@ neighbours from the tile. Both produce byte-identical results to the CPU oracle;
 the report's job is to measure whether the staging pays off (Section
 \ref{sec:timing} predicts it largely will not for a 1-byte stencil).
 
+\subsection{Three coordinate spaces: thread, board, and memory}
+\label{sec:cuda-spaces}
+
+The single most common source of confusion in the CUDA backend is collapsing
+three distinct coordinate systems into one. The kernel juggles all three, and
+keeping them separate makes the index arithmetic obvious
+(Figure~\ref{fig:cuda-spaces}):
+
+\begin{itemize}
+	\item \textbf{Execution space} --- how the \emph{threads} are organised: the
+	\texttt{dim3 grid}/\texttt{block} the launcher picks, addressed by the 2-D
+	\texttt{blockIdx} and \texttt{threadIdx}. This says nothing about memory; it is
+	only how work is handed out.
+	\item \textbf{Board space} --- the \texttt{rows} $\times$ \texttt{cols} logical
+	Game-of-Life grid, addressed by \texttt{(row, col)}. This is where ``above'',
+	``below'', ``left'' and ``right'' mean something.
+	\item \textbf{Memory space} --- the flat, row-major 1-D \texttt{Grid} array,
+	addressed by a single \texttt{offset}.
+\end{itemize}
+
+The \texttt{Grid} is \emph{always} 1-D; the 2-D thread indexing exists only to
+assign one thread per cell and to make neighbour arithmetic cheap. Two maps
+connect the spaces, and each is a single line of kernel code. The launcher's
+thread indices become board coordinates (\texttt{kernel.cu:30--31}):
+\texttt{col = blockIdx.x*32 + threadIdx.x} and
+\texttt{row = blockIdx.y*by + threadIdx.y}; and the instant the kernel touches
+memory it flattens back to 1-D (\texttt{kernel.cu:46,49}):
+\texttt{offset = row*cols + col}. That single \texttt{*cols} is the hinge that
+ties the three spaces together.
+
+\insertimage{cuda_coordinate_spaces}{width=\linewidth}{The three coordinate
+spaces and the two maps between them. Threads are indexed in 2-D (execution
+space) only for convenience; the board is the 2-D logical grid; storage is a flat
+1-D array. \texttt{col}/\texttt{row} come from the thread indices, and
+\texttt{offset = row*cols + col} flattens a board cell to its array slot.
+\label{fig:cuda-spaces}}
+
+\paragraph{A block is a rectangle on the board, not a run in memory.} The block
+shape \texttt{32}\,$\times$\,\texttt{by} is \texttt{32}\,$\times$\,\texttt{by}
+adjacent cells \emph{in board space} --- a small rectangle --- which is
+\emph{not} \texttt{32}\,$\times$\,\texttt{by} adjacent cells in memory. Each of
+the \texttt{by} rows of the block is a run of 32 contiguous bytes, and
+consecutive rows sit \texttt{cols} apart, because that is what ``the row below''
+means in row-major storage. Figure~\ref{fig:cuda-blockmap} makes this concrete on
+a scaled-down \texttt{8}\,$\times$\,\texttt{6} board with a
+\texttt{4}\,$\times$\,\texttt{2} block: the block's eight cells are two contiguous
+4-runs separated by a \texttt{cols - bx} gap. A \emph{warp} --- the 32 threads
+(here drawn as 4) sharing one \texttt{threadIdx.y} --- is exactly one such
+contiguous run, which is why those loads coalesce into a single memory
+transaction and why \texttt{bx} is pinned to 32. The cell directly ``below'' a
+thread is \texttt{+cols} away in memory, never \texttt{+bx}.
+
+\insertimage{cuda_block_mapping}{width=\linewidth}{One block maps to a rectangle
+on the board (top) but to two \emph{discontiguous} runs in memory (bottom),
+\texttt{cols - bx} apart. Scaled down (\texttt{cols=8},
+\texttt{4}$\times$\texttt{2} block, ``warp''~=~4) to fit; real code uses a 32-wide
+warp. Cell numbers are the 1-D offset \texttt{row*cols + col}. Each warp (fixed
+\texttt{threadIdx.y}) is one contiguous run, so its loads coalesce.
+\label{fig:cuda-blockmap}}
+
+\paragraph{Neighbours are reconstructed, not stored adjacently.} Because storage
+is 1-D, the nine cells of the stencil are not contiguous either. The kernel
+reaches each neighbour by recomputing its offset
+(Figure~\ref{fig:cuda-stencil}): the two horizontal neighbours are \texttt{idx}
+$\pm$ \texttt{1}, but the two vertical neighbours are \texttt{idx} $\pm$
+\texttt{cols} --- a whole row away --- and the diagonals combine both. This is
+exactly the \texttt{nr*cols + nc} expression in \texttt{lifeGlobal}'s neighbour
+loop (\texttt{kernel.cu:46}): the 2-D adjacency of the board is rebuilt
+arithmetically from the 1-D layout on every access, so the same flat
+\texttt{Grid} serves every backend unchanged.
+
+\insertimage{cuda_stencil_addressing}{width=0.85\linewidth}{The 9-point stencil
+expressed in memory offsets. Horizontal neighbours are
+\texttt{idx}~$\pm$~\texttt{1}; vertical neighbours are
+\texttt{idx}~$\pm$~\texttt{cols} (a whole row away); diagonals combine both. The
+kernel computes these as \texttt{nr*cols + nc}. \label{fig:cuda-stencil}}
+
 \subsection{The two swept options}
 
 Block size (\texttt{--block}) and shared memory (\texttt{--shared}) are the two

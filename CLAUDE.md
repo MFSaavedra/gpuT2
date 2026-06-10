@@ -235,6 +235,22 @@ mmdc -i report/diagrams/architecture.mmd -o report/img/uml_architecture.png \
      -p report/diagrams/puppeteer.json -c report/diagrams/mermaid-config.json -b white -t neutral -s 3
 ```
 
+**CUDA index-mapping diagrams.** Three Graphviz sources in `report/diagrams/` explain how the 1-D
+flat `Grid` maps onto the 2-D CUDA thread/block geometry (the "three coordinate spaces" subsection in
+the manual and the CUDA implementation subsection in the report): `cuda_coordinate_spaces.dot`
+(execution → board → memory + the two maps), `cuda_block_mapping.dot` (a block is a rectangle on the
+board but two discontiguous runs in memory, `cols - bx` apart — scaled down to a 4×2 block to fit),
+and `cuda_stencil_addressing.dot` (the 9-point stencil as memory offsets: ±1 horizontal, ±cols
+vertical). Each renders to `report/img/<name>.{pdf,png}` (PDF embedded in both `.tex` via
+`\insertimage`). Regenerate after changing the kernel's index math:
+
+```bash
+for d in cuda_coordinate_spaces cuda_block_mapping cuda_stencil_addressing; do
+  dot -Tpdf report/diagrams/$d.dot -o report/img/$d.pdf
+  dot -Tpng -Gdpi=200 report/diagrams/$d.dot -o report/img/$d.png
+done
+```
+
 The assignment statement is `Tarea_2_Enunciado.pdf` (in Spanish) — the source of truth for requirements.
 
 ## Documentation maintenance

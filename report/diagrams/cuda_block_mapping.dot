@@ -1,0 +1,78 @@
+// CUDA backend: a block is a rectangle ON THE BOARD, not a contiguous run IN MEMORY.
+// Scaled down (cols=8, rows=6, block 4x2 so a "warp" is 4 wide) so it fits the page;
+// the real code uses bx=32. Cell numbers are the 1-D offset = row*cols + col.
+//   dot -Tpdf report/diagrams/cuda_block_mapping.dot -o report/img/cuda_block_mapping.pdf
+//   dot -Tpng -Gdpi=200 report/diagrams/cuda_block_mapping.dot -o report/img/cuda_block_mapping.png
+digraph cuda_block_mapping {
+  rankdir=TB;
+  bgcolor="white";
+  nodesep=0.5; ranksep=0.9;
+  node [shape=plaintext, fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=9, penwidth=1.6];
+
+  board [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="6" COLOR="#bbbbbb">
+      <TR>
+        <TD BORDER="0"></TD>
+        <TD BORDER="0"><FONT POINT-SIZE="9" COLOR="#888888">c0</FONT></TD>
+        <TD BORDER="0"><FONT POINT-SIZE="9" COLOR="#888888">c1</FONT></TD>
+        <TD BORDER="0"><FONT POINT-SIZE="9" COLOR="#888888">c2</FONT></TD>
+        <TD BORDER="0"><FONT POINT-SIZE="9" COLOR="#888888">c3</FONT></TD>
+        <TD BORDER="0"><FONT POINT-SIZE="9" COLOR="#888888">c4</FONT></TD>
+        <TD BORDER="0"><FONT POINT-SIZE="9" COLOR="#888888">c5</FONT></TD>
+        <TD BORDER="0"><FONT POINT-SIZE="9" COLOR="#888888">c6</FONT></TD>
+        <TD BORDER="0"><FONT POINT-SIZE="9" COLOR="#888888">c7</FONT></TD>
+      </TR>
+      <TR>
+        <TD BORDER="0"><FONT POINT-SIZE="9" COLOR="#888888">r0</FONT></TD>
+        <TD>0</TD><TD>1</TD><TD>2</TD><TD>3</TD><TD>4</TD><TD>5</TD><TD>6</TD><TD>7</TD>
+      </TR>
+      <TR>
+        <TD BORDER="0"><FONT POINT-SIZE="9" COLOR="#888888">r1</FONT></TD>
+        <TD>8</TD><TD>9</TD><TD>10</TD><TD>11</TD><TD>12</TD><TD>13</TD><TD>14</TD><TD>15</TD>
+      </TR>
+      <TR>
+        <TD BORDER="0"><FONT POINT-SIZE="9" COLOR="#888888">r2</FONT></TD>
+        <TD>16</TD><TD>17</TD><TD>18</TD><TD>19</TD>
+        <TD BGCOLOR="#cfe3f7" PORT="a">20</TD><TD BGCOLOR="#cfe3f7">21</TD><TD BGCOLOR="#cfe3f7">22</TD><TD BGCOLOR="#cfe3f7">23</TD>
+      </TR>
+      <TR>
+        <TD BORDER="0"><FONT POINT-SIZE="9" COLOR="#888888">r3</FONT></TD>
+        <TD>24</TD><TD>25</TD><TD>26</TD><TD>27</TD>
+        <TD BGCOLOR="#bfe0cf" PORT="b">28</TD><TD BGCOLOR="#bfe0cf">29</TD><TD BGCOLOR="#bfe0cf">30</TD><TD BGCOLOR="#bfe0cf">31</TD>
+      </TR>
+      <TR>
+        <TD BORDER="0"><FONT POINT-SIZE="9" COLOR="#888888">r4</FONT></TD>
+        <TD>32</TD><TD>33</TD><TD>34</TD><TD>35</TD><TD>36</TD><TD>37</TD><TD>38</TD><TD>39</TD>
+      </TR>
+      <TR>
+        <TD BORDER="0"><FONT POINT-SIZE="9" COLOR="#888888">r5</FONT></TD>
+        <TD>40</TD><TD>41</TD><TD>42</TD><TD>43</TD><TD>44</TD><TD>45</TD><TD>46</TD><TD>47</TD>
+      </TR>
+      <TR>
+        <TD BORDER="0" COLSPAN="9"><FONT POINT-SIZE="10"><B>2-D board.</B> Block (blockIdx=(1,1), blockDim=4x2) owns cols 4..7, rows 2..3.</FONT></TD>
+      </TR>
+    </TABLE>
+  >];
+
+  mem [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="6" COLOR="#bbbbbb">
+      <TR>
+        <TD BGCOLOR="#cfe3f7" PORT="a">20</TD><TD BGCOLOR="#cfe3f7">21</TD><TD BGCOLOR="#cfe3f7">22</TD><TD BGCOLOR="#cfe3f7">23</TD>
+        <TD BGCOLOR="#eeeeee">24</TD><TD BGCOLOR="#eeeeee">25</TD><TD BGCOLOR="#eeeeee">26</TD><TD BGCOLOR="#eeeeee">27</TD>
+        <TD BGCOLOR="#bfe0cf" PORT="b">28</TD><TD BGCOLOR="#bfe0cf">29</TD><TD BGCOLOR="#bfe0cf">30</TD><TD BGCOLOR="#bfe0cf">31</TD>
+      </TR>
+      <TR>
+        <TD BORDER="0" COLSPAN="4"><FONT POINT-SIZE="9" COLOR="#33557a">run A = row 2 (one warp, threadIdx.y=0)</FONT></TD>
+        <TD BORDER="0" COLSPAN="4"><FONT POINT-SIZE="9" COLOR="#999999">gap = cols - bx = 4 cells (not in the block)</FONT></TD>
+        <TD BORDER="0" COLSPAN="4"><FONT POINT-SIZE="9" COLOR="#2f7a5d">run B = row 3 (one warp, threadIdx.y=1)</FONT></TD>
+      </TR>
+      <TR>
+        <TD BORDER="0" COLSPAN="12"><FONT POINT-SIZE="10"><B>1-D memory</B> (same cells, row-major): two contiguous 4-runs, cols-bx apart -- NOT 8 contiguous cells.</FONT></TD>
+      </TR>
+    </TABLE>
+  >];
+
+  board:a:s -> mem:a:n [color="#33557a"];
+  board:b:s -> mem:b:n [color="#2f7a5d"];
+}

@@ -286,6 +286,52 @@ else
   lifeGlobal<<<grid, block>>>(src, dst, rows, cols, wrap);
 \end{sourcecode}
 
+Para entender ese mapeo conviene separar \textbf{tres espacios de coordenadas}
+(Figura~\ref{fig:cuda-spaces-es}): el \emph{espacio de ejecución} (cómo se
+organizan los hilos: \texttt{blockIdx}, \texttt{threadIdx}, en 2D), el
+\emph{espacio del tablero} (la grilla lógica
+\texttt{rows}\,$\times$\,\texttt{cols}, indexada por \texttt{(row, col)}) y el
+\emph{espacio de memoria} (el arreglo plano 1D en orden \emph{row-major},
+indexado por un único \texttt{offset}). El arreglo es siempre 1D; la indexación
+2D de los hilos solo sirve para asignar un hilo por celda y para abaratar el
+cálculo de vecinos. Dos funciones los conectan:
+\texttt{col = blockIdx.x*32 + threadIdx.x},
+\texttt{row = blockIdx.y*by + threadIdx.y}, y al acceder a memoria se aplana con
+\texttt{offset = row*cols + col} (la expresión \texttt{nr*cols + nc} del
+Código~\ref{code:cudakernel}).
+
+\insertimage{cuda_coordinate_spaces}{width=\linewidth}{Los tres espacios de
+coordenadas y las dos funciones que los conectan: los índices de hilo dan
+\texttt{(row, col)}, y \texttt{offset = row*cols + col} aplana la celda a su
+posición en el arreglo. \label{fig:cuda-spaces-es}}
+
+Una consecuencia clave es que un bloque de \texttt{32}\,$\times$\,\texttt{by}
+hilos es un \textbf{rectángulo en el tablero}, pero \emph{no} un tramo contiguo
+en memoria (Figura~\ref{fig:cuda-blockmap-es}): cada una de sus \texttt{by} filas
+es un tramo de 32 bytes contiguos, y filas consecutivas quedan separadas por
+\texttt{cols} celdas. Un \emph{warp} (32 hilos con igual \texttt{threadIdx.y}) es
+justamente uno de esos tramos contiguos ---por eso sus lecturas son coalescentes
+y por eso se fija \texttt{bx = 32}---. La celda ``de abajo'' está a
+\texttt{+cols}, no a \texttt{+bx}.
+
+\insertimage{cuda_block_mapping}{width=\linewidth}{Un bloque corresponde a un
+rectángulo en el tablero (arriba) pero a dos tramos \emph{no contiguos} en
+memoria (abajo), separados por \texttt{cols - bx}. Ejemplo a escala reducida
+(\texttt{cols=8}, bloque \texttt{4}$\times$\texttt{2}, \emph{warp}~=~4); el código
+real usa un warp de 32. \label{fig:cuda-blockmap-es}}
+
+Por la misma razón, los nueve vecinos del \emph{stencil} tampoco son contiguos:
+el kernel reconstruye cada uno aritméticamente
+(Figura~\ref{fig:cuda-stencil-es}). Los vecinos horizontales están a
+\texttt{idx}~$\pm$~\texttt{1} y los verticales a \texttt{idx}~$\pm$~\texttt{cols}
+(una fila completa de distancia), tal como hace \texttt{nr*cols + nc} en el
+Código~\ref{code:cudakernel}.
+
+\insertimage{cuda_stencil_addressing}{width=0.85\linewidth}{Vecindario de 9
+puntos en \emph{offsets} de memoria: horizontales
+\texttt{idx}~$\pm$~\texttt{1}, verticales \texttt{idx}~$\pm$~\texttt{cols}. El
+kernel los calcula como \texttt{nr*cols + nc}. \label{fig:cuda-stencil-es}}
+
 El kernel de memoria compartida (\texttt{--shared}) primero carga
 cooperativamente un \emph{tile} de $(bx{+}2)\times(by{+}2)$ celdas (las del bloque
 más un halo de una celda) en memoria compartida ---aplicando el mismo manejo de

@@ -1,0 +1,32 @@
+// CUDA backend: the 9-point stencil reconstructs 2-D adjacency from the 1-D layout.
+// idx = row*cols + col. Vertical neighbours are +/- cols away in memory; horizontal +/- 1.
+// This is exactly the nr*cols + nc expression in lifeGlobal's neighbour loop.
+//   dot -Tpdf report/diagrams/cuda_stencil_addressing.dot -o report/img/cuda_stencil_addressing.pdf
+//   dot -Tpng -Gdpi=200 report/diagrams/cuda_stencil_addressing.dot -o report/img/cuda_stencil_addressing.png
+digraph cuda_stencil_addressing {
+  bgcolor="white";
+  node [shape=plaintext, fontname="Helvetica"];
+
+  stencil [label=<
+    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="10" COLOR="#bbbbbb">
+      <TR>
+        <TD BGCOLOR="#f3f3f3"><FONT POINT-SIZE="10" COLOR="#777777">(r-1, c-1)</FONT><BR/><FONT POINT-SIZE="12"><B>idx - cols - 1</B></FONT></TD>
+        <TD BGCOLOR="#e1ecf8"><FONT POINT-SIZE="10" COLOR="#777777">(r-1, c)</FONT><BR/><FONT POINT-SIZE="12"><B>idx - cols</B></FONT></TD>
+        <TD BGCOLOR="#f3f3f3"><FONT POINT-SIZE="10" COLOR="#777777">(r-1, c+1)</FONT><BR/><FONT POINT-SIZE="12"><B>idx - cols + 1</B></FONT></TD>
+      </TR>
+      <TR>
+        <TD BGCOLOR="#e1ecf8"><FONT POINT-SIZE="10" COLOR="#777777">(r, c-1)</FONT><BR/><FONT POINT-SIZE="12"><B>idx - 1</B></FONT></TD>
+        <TD BGCOLOR="#ffe6bf"><FONT POINT-SIZE="10" COLOR="#996515">(r, c) &mdash; this thread</FONT><BR/><FONT POINT-SIZE="12"><B>idx = row*cols + col</B></FONT></TD>
+        <TD BGCOLOR="#e1ecf8"><FONT POINT-SIZE="10" COLOR="#777777">(r, c+1)</FONT><BR/><FONT POINT-SIZE="12"><B>idx + 1</B></FONT></TD>
+      </TR>
+      <TR>
+        <TD BGCOLOR="#f3f3f3"><FONT POINT-SIZE="10" COLOR="#777777">(r+1, c-1)</FONT><BR/><FONT POINT-SIZE="12"><B>idx + cols - 1</B></FONT></TD>
+        <TD BGCOLOR="#e1ecf8"><FONT POINT-SIZE="10" COLOR="#777777">(r+1, c)</FONT><BR/><FONT POINT-SIZE="12"><B>idx + cols</B></FONT></TD>
+        <TD BGCOLOR="#f3f3f3"><FONT POINT-SIZE="10" COLOR="#777777">(r+1, c+1)</FONT><BR/><FONT POINT-SIZE="12"><B>idx + cols + 1</B></FONT></TD>
+      </TR>
+      <TR>
+        <TD BORDER="0" COLSPAN="3"><FONT POINT-SIZE="10">Blue = orthogonal neighbours: horizontal = idx +/- 1, vertical = idx +/- cols (a whole row away).  Grey = diagonals (both).</FONT></TD>
+      </TR>
+    </TABLE>
+  >];
+}
