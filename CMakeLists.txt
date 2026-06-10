@@ -58,8 +58,7 @@ target_link_libraries(gol PRIVATE gol_core gol_cpu gol_render)
 # ----------------------------------------------------------------------------
 option(BUILD_CUDA "Build the CUDA engine" OFF)
 if(BUILD_CUDA)
-    set(_cuda_src ${CMAKE_CURRENT_SOURCE_DIR}/src/engines/cuda/CudaEngine.cu
-            include/gol/engines/OpenCLEngine.hpp)
+    set(_cuda_src ${CMAKE_CURRENT_SOURCE_DIR}/src/engines/cuda/CudaEngine.cu)
     if(EXISTS ${_cuda_src})
         enable_language(CUDA)
         add_library(gol_cuda
@@ -100,6 +99,16 @@ if(BUILD_OPENCL)
 
         add_library(gol_opencl ${_opencl_src})
         target_link_libraries(gol_opencl PUBLIC gol_core OpenCL::OpenCL)
+
+        # kernel.cl is read at runtime (per the design), so bake in its absolute
+        # source path -- otherwise the binary only finds the kernel when launched
+        # from the repo root.
+        target_compile_definitions(gol_opencl PRIVATE
+            GOL_OPENCL_KERNEL_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/engines/opencl/kernel.cl"
+            # The host code uses the OpenCL 1.2 API surface (clCreateCommandQueue,
+            # etc.); pinning the target version silences the headers' "version not
+            # defined" pragma and the 2.0+ deprecation warning.
+            CL_TARGET_OPENCL_VERSION=120)
 
         target_link_libraries(gol PRIVATE gol_opencl)
         target_compile_definitions(gol PRIVATE GOL_HAVE_OPENCL)
