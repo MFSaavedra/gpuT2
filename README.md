@@ -17,11 +17,15 @@ rule **HighLife** (`B36/S23`), and it must hold identically in every backend.
   ping-pong and two runtime-selectable kernels (plain global memory and a
   shared-memory tiled variant), verified bit-for-bit against the CPU oracle.
   Opt in with `-DBUILD_CUDA=ON`.
-* **OpenCL engine** — planned. The CLI flag and CMake target exist, but the
-  device source does not yet, so `--engine opencl` currently errors.
+* **OpenCL engine** — implemented. Mirrors the CUDA design (one work-item per
+  cell, device-side ping-pong, two runtime-selectable kernels: plain global
+  memory and a local-memory tiled variant via `--shared`). The kernel source
+  `kernel.cl` is read at runtime and verified bit-for-bit against the CPU oracle
+  (`--engine opencl --verify`). Opt in with `-DBUILD_OPENCL=ON`.
 
-The CPU-vs-CUDA benchmark sweeps and the Nsight (`ncu`/`nsys`) profiling are
-done; see **Benchmarking** and **Report** below.
+All three backends run and verify against the CPU oracle. The CPU-vs-CUDA
+benchmark sweeps and the Nsight (`ncu`/`nsys`) profiling are done (Nsight Compute
+is CUDA-only); see **Benchmarking** and **Report** below.
 
 ## Requirements
 
@@ -39,7 +43,7 @@ cmake -S . -B build
 cmake --build build
 ```
 
-To opt in to GPU targets (CUDA works today; OpenCL is planned):
+To opt in to the GPU targets (each is independent; build either or both):
 
 ```bash
 cmake -S . -B build -DBUILD_CUDA=ON -DBUILD_OPENCL=ON
@@ -62,7 +66,8 @@ cmake --build build
 | `--seed N` | 1 | RNG seed for the random fill |
 | `--rle PATH` | — | seed from an RLE pattern (centred) instead of a random fill |
 | `--renderer null\|text\|ansi` | null | `null` for benchmarking, `text` for a scrolling ASCII dump, `ansi` for an in-place animation (interactive on a TTY) |
-| `--engine cpu\|cuda\|opencl` | cpu | simulation backend (`cpu` and `cuda` work; `opencl` is planned) |
+| `--engine cpu\|cuda\|opencl` | cpu | simulation backend (all three implemented; `cuda`/`opencl` need their target built in) |
+| `--verify` | off | run the selected backend and the sequential CPU on the same seed and assert bit-for-bit equality |
 | `--block N`, `--shared` | 256, off | GPU kernel knobs (block size and shared-memory tiling), swept in the report (ignored by the CPU engine) |
 | `--csv`, `--csv-header` | — | emit one CSV data row / the header line, for benchmark sweep scripts |
 

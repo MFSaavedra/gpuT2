@@ -163,9 +163,9 @@ the per-generation compute --- sits behind \texttt{ISimEngine}; output sits
 behind \texttt{IRenderer}; the application owns the loop and wires one of each at
 runtime from the parsed configuration.
 
-\begin{sourcecode}{plaintext}{The strategy layout. Parenthesised backends/renderers are scaffolded or planned.}
+\begin{sourcecode}{plaintext}{The strategy layout. Parenthesised entries are planned (only GuiRenderer).}
 Application (main.cpp)  -- owns the loop + Config/CLI
-  |-- ISimEngine   <- CpuEngine | CudaEngine | (OpenCLEngine)
+  |-- ISimEngine   <- CpuEngine | CudaEngine | OpenCLEngine
   |-- IRenderer    <- NullRenderer | TextRenderer | AnsiRenderer | (GuiRenderer later)
   '-- Grid + Pattern  (shared, backend-agnostic state & seed data)
 \end{sourcecode}
@@ -179,8 +179,8 @@ gol_core  (Grid, Config+CLI, patterns, RLE, interfaces)
    |-- gol_cpu     (CpuEngine; links Threads::Threads)
    |-- gol_render  (TextRenderer, AnsiRenderer)
    |-- gol_cuda    (CudaEngine; opt-in, -DBUILD_CUDA=ON)
-   '-- (gol_opencl -- opt-in, not yet present)
-gol  executable  =  gol_core + gol_cpu + gol_render (+ gol_cuda when built)
+   '-- gol_opencl  (OpenCLEngine; opt-in, -DBUILD_OPENCL=ON)
+gol  executable  =  gol_core + gol_cpu + gol_render (+ gol_cuda / gol_opencl when built)
 \end{sourcecode}
 
 The UML class diagram in Figure \ref{fig:uml} renders these relationships
@@ -191,13 +191,14 @@ every backend and renderer is a realization behind them, and the shared
 \insertimage{uml_architecture}{width=\linewidth}{UML class diagram of the
 project (generated from \texttt{report/diagrams/architecture.mmd} with
 mermaid-cli). The \texttt{Application} owns one \texttt{ISimEngine} and one
-\texttt{IRenderer} --- the two strategy interfaces. \texttt{CpuEngine} and
-\texttt{CudaEngine} realize \texttt{ISimEngine}; \texttt{OpenCLEngine} is marked
-\emph{planned}. \texttt{NullRenderer}, \texttt{TextRenderer} and
-\texttt{AnsiRenderer} realize \texttt{IRenderer}. Dashed arrows are dependencies
-(e.g. \texttt{CpuEngine} and \texttt{CudaEngine} both use
-\texttt{LifeRules::nextState}; \texttt{RleLoader} produces a \texttt{Pattern}
-that stamps a \texttt{Grid}). \label{fig:uml}}
+\texttt{IRenderer} --- the two strategy interfaces. \texttt{CpuEngine},
+\texttt{CudaEngine} and \texttt{OpenCLEngine} realize \texttt{ISimEngine}.
+\texttt{NullRenderer}, \texttt{TextRenderer} and \texttt{AnsiRenderer} realize
+\texttt{IRenderer}. Dashed arrows are dependencies: \texttt{CpuEngine} and
+\texttt{CudaEngine} use \texttt{LifeRules::nextState} directly, while
+\texttt{OpenCLEngine} mirrors that rule in \texttt{kernel.cl} (read at runtime);
+\texttt{RleLoader} produces a \texttt{Pattern} that stamps a \texttt{Grid}.
+\label{fig:uml}}
 
 Table \ref{tab:files} is the file map. Header-only units carry no \texttt{.cpp}
 and impose no link dependency.
@@ -1448,9 +1449,11 @@ benchmark sweeps (\texttt{scripts/sweep.sh}), the results CSVs, the analysis not
 (\texttt{analysis/results.ipynb}), and the Nsight (\texttt{ncu}/\texttt{nsys})
 profiling of the best CUDA kernel are also done and populate \texttt{main.tex}.
 
-\paragraph{Pending.} \texttt{OpenCLEngine} (\texttt{src/engines/opencl/}), its
-cross-backend equivalence test, and its \texttt{std::chrono} profiling --- the only
-remaining backend.
+\paragraph{Pending.} \texttt{OpenCLEngine} (\texttt{src/engines/opencl/}) is now
+implemented and verified at runtime against the CPU oracle
+(\texttt{--engine opencl --verify}). What remains is a dedicated
+\texttt{gol\_opencl\_tests} cross-backend gtest (mirroring the CUDA one) and
+folding its command-queue timing into the report's OpenCL profiling section.
 
 \paragraph{How a GPU backend slots in.} Implement \texttt{ISimEngine}: own two
 device buffers, \texttt{upload} once, ping-pong on the device inside

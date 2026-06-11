@@ -64,14 +64,13 @@
 % RESUMEN O ABSTRACT
 \begin{abstractd}
 	Este informe describe el desarrollo y la evaluación de implementaciones del
-	Juego de la Vida de Conway en CPU (secuencial y paralela) y GPU, con el fin de
+	Juego de la Vida de Conway en CPU y GPU, con el fin de
 	medir las células evaluadas por segundo y el \emph{speed-up} de la GPU respecto
 	de la CPU. Se utiliza una variación de las reglas estándar en la que una célula
 	muerta también nace si tiene exactamente $6$ vecinos vivos (la regla
 	\emph{HighLife}, \texttt{B36/S23}). El núcleo del proyecto es agnóstico al
 	backend: una grilla plana común, una única regla compartida y dos interfaces
-	intercambiables (motor de simulación y \emph{renderer}). A la fecha están
-	implementados y verificados los motores de CPU y CUDA; este último se compara
+	intercambiables (motor de simulación y \emph{renderer}). La implementación de CUDA se compara
 	bit a bit contra la CPU como oráculo. Se comparan dos variaciones de
 	configuración del kernel (tamaño de bloque y uso de memoria compartida) y se
 	analiza a partir de qué tamaño de cuadrícula $N \times M$ conviene usar la GPU. La
@@ -102,10 +101,6 @@ considera la siguiente \emph{variación} de las reglas estándar:
 	\item Una célula sobrevive a la próxima generación si tiene $2$ o $3$ vecinos vivos.
 	\item Una célula también nace en un espacio muerto si tiene exactamente $6$ vecinos vivos.
 \end{itemize}
-
-La cláusula adicional (nacer con $6$ vecinos) corresponde a la regla conocida como
-\emph{HighLife} (\texttt{B36/S23}). Es el detalle más fácil de implementar de
-forma inconsistente, por lo que debe valer idénticamente en todos los backends.
 
 El objetivo es implementar el algoritmo en CPU (secuencial), CUDA y OpenCL, medir
 su rendimiento en \emph{células evaluadas por segundo}, comparar dos técnicas de
@@ -146,10 +141,11 @@ clases y relaciones.
 
 \insertimage{uml_architecture}{width=\linewidth}{Diagrama de clases del proyecto.
 La \texttt{Application} posee un \texttt{ISimEngine} y un \texttt{IRenderer} (las
-dos estrategias). \texttt{CpuEngine} y \texttt{CudaEngine} realizan
-\texttt{ISimEngine}; \texttt{OpenCLEngine} está planificado. Las flechas
-punteadas son dependencias: \texttt{CpuEngine} y \texttt{CudaEngine} usan ambos
-\texttt{LifeRules::nextState}. \label{fig:uml}}
+dos estrategias). \texttt{CpuEngine}, \texttt{CudaEngine} y \texttt{OpenCLEngine}
+realizan \texttt{ISimEngine}. Las flechas punteadas son dependencias:
+\texttt{CpuEngine} y \texttt{CudaEngine} usan \texttt{LifeRules::nextState}
+directamente, mientras que \texttt{OpenCLEngine} replica esa misma regla en
+\texttt{kernel.cl} (leído en tiempo de ejecución). \label{fig:uml}}
 
 Tres decisiones del núcleo hacen posible comparar los backends de forma justa:
 

@@ -46,7 +46,10 @@ classDiagram
     +step()
   }
   class OpenCLEngine {
-    <<planned>>
+    -blockSize_ int
+    -wrap_ bool
+    -useShared_ bool
+    +step()
   }
 
   class NullRenderer {
@@ -126,7 +129,8 @@ classDiagram
   CpuEngine ..> Grid
   CpuEngine ..> LifeRules : nextState()
   CpuEngine ..> Timer : kernel timing
-  CudaEngine ..> LifeRules
+  CudaEngine ..> LifeRules : nextState()
+  OpenCLEngine ..> LifeRules : mirrors in kernel.cl
   RleLoader ..> Pattern : produces
   Pattern ..> Grid : applyTo()
   Config --> EngineKind

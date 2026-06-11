@@ -47,6 +47,16 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   across block sizes, shared/global, and both edge modes (`cuda_equivalence_test.cpp`). Opt-in via
   `-DBUILD_CUDA=ON`; targets `sm_75` (GTX 1660 Ti) with `-lineinfo` for `ncu`.
 
+- **OpenCLEngine** (`ISimEngine`) — implemented. Mirrors the CUDA design: one work-item per cell over a
+  2D NDRange, two device buffers ping-ponged on the device, and two runtime-selectable kernels — plain
+  global-memory `life_global` and a local-memory tiled variant with a 1-cell halo (`life_local`, via
+  `--shared`); the work-group maps to a 32-wide local size, like CUDA's tile. The kernel source
+  `kernel.cl` is **read at runtime** (`clCreateProgramWithSource`) and mirrors `nextState` + the edge
+  rule in plain C; kernel timed with `CL_QUEUE_PROFILING_ENABLE` command-queue events (excludes
+  transfers). Verified **bit-for-bit against the `CpuEngine` oracle** at runtime via
+  `--engine opencl --verify` (no dedicated gtest yet — see Tests). Opt-in via `-DBUILD_OPENCL=ON`; on an
+  NVIDIA box the platform is "NVIDIA CUDA", so it lowers through the same PTX/SASS backend as CUDA.
+
 - **Benchmarks** — run. `scripts/sweep.sh` drives the CPU(threads) + CUDA(block×shared) sweeps to
   `results/sweep_*.csv`; `analysis/results.ipynb` (Spanish) plots them to `report/img/bench_*.png`.
   Headline: CUDA peaks ~32 Gcells/s, ~200× over the best parallel CPU; **shared memory is slower**
@@ -55,11 +65,11 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   `nsys`: ~30 µs/step launch overhead, H2D 8.4 GB/s (pageable `std::vector`). Report Resultados/Análisis,
   §Cotas, and §Perfilamiento are filled from this (`results/profiling/*.ncu-rep`).
 
-Still greenfield: OpenCL (`OpenCLEngine`) — no device source yet, so `--engine opencl` errors (and is
-omitted from a build without `-DBUILD_OPENCL=ON`). GPU CMake targets are opt-in and double-gated (the
-option **and** the source must exist). `CpuEngine` is the reference oracle every GPU backend is checked
-against. The chosen optimization options to benchmark are **#1 block size** and **#3 shared memory**
-(the `--block` / `--shared` knobs); option #2 (2D vs 1D arrays) is not used — the `Grid` is flat 1-D.
+All three backends now run and verify against the `CpuEngine` reference oracle. GPU CMake targets are
+opt-in and double-gated (the option **and** the source must exist); the project still builds and runs
+(CPU + text) with neither toolkit present. The chosen optimization options to benchmark are **#1 block
+size** and **#3 shared/local memory** (the `--block` / `--shared` knobs); option #2 (2D vs 1D arrays)
+is not used — the `Grid` is flat 1-D.
 
 ## Build & test
 
@@ -131,18 +141,18 @@ CMake: a core library (always), a CPU engine (always), CUDA/OpenCL engine librar
 `BUILD_CUDA` / `BUILD_OPENCL`, and renderer sources. The project must build and run (CPU + text) with
 no CUDA toolkit and no OpenCL present.
 
-Layout (parenthesised paths are planned, not yet present):
+Layout (parenthesised notes are clarifications — header-only units, directory contents):
 
 ```
 include/gol/   Grid.hpp ISimEngine.hpp IRenderer.hpp Config.hpp LifeRules.hpp Timer.hpp
                engines/CpuEngine.hpp  render/NullRenderer.hpp render/TextRenderer.hpp render/AnsiRenderer.hpp
                patterns/Pattern.hpp patterns/RleLoader.hpp
 src/core/      Config.cpp main.cpp                         (Grid/LifeRules/Timer are header-only)
-src/engines/   cpu/CpuEngine.cpp  cuda/CudaEngine.cu cuda/kernel.cu   (opencl/OpenCLEngine.cpp opencl/kernel.cl)
-include/gol/engines/  CudaEngine.hpp  cuda/kernel.cuh
+src/engines/   cpu/CpuEngine.cpp  cuda/CudaEngine.cu cuda/kernel.cu  opencl/OpenCLEngine.cpp opencl/kernel.cl
+include/gol/engines/  CudaEngine.hpp  cuda/kernel.cuh  OpenCLEngine.hpp
 src/render/    TextRenderer.cpp AnsiRenderer.cpp           (NullRenderer is header-only)
 src/patterns/  Pattern.cpp RleLoader.cpp
-tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp
+tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp cuda_equivalence_test.cpp
 patterns/      *.rle                                       (block, blinker, birth_on_six, highlife_replicator, highlife_spaceship)
 scripts/       sweep.sh                                    (CPU+CUDA benchmark sweeps -> results/*.csv)
 results/       sweep_cuda_opt.csv sweep_scaling.csv         (Pandas-ready sweep data)
@@ -150,7 +160,7 @@ analysis/      results.ipynb                               (loads results/, writ
 ```
 
 Per the report plan (`report/main.tex`), the two kernel-config variations to benchmark are block sizes
-{32, 64, 128, 256} and shared/local memory vs none. Both should be runtime-selectable on the GPU
+{32, 64, 128, 256} and shared/local memory vs none. Both are runtime-selectable on the GPU
 engines (e.g. `--block`, `--shared`) so the same binary drives every benchmark configuration.
 
 ## Timing & profiling
@@ -195,11 +205,13 @@ In dependency order (`CpuEngine` is the oracle, so it is verified first):
 3. **RLE loader + `Pattern::applyTo`** — done. Parsing, stamping, clipping, missing-file errors
    (`rle_loader_test.cpp`). `compile_smoke_test.cpp` also includes every header so the scaffolding stays
    build-clean.
-4. **Cross-backend equivalence** — CUDA done, OpenCL pending. `cuda_equivalence_test.cpp` seeds CUDA
-   and CPU identically and asserts bit-for-bit equality against the `CpuEngine` oracle across block
-   sizes {32,64,128,256}, shared/global kernels, and both edge modes (plus a birth-on-6 device check).
-   Built only when `-DBUILD_CUDA=ON` (`gol_cuda_tests`); needs a GPU at run time. OpenCL will follow the
-   same pattern.
+4. **Cross-backend equivalence** — CUDA done (gtest); OpenCL verified at runtime, gtest pending.
+   `cuda_equivalence_test.cpp` seeds CUDA and CPU identically and asserts bit-for-bit equality against
+   the `CpuEngine` oracle across block sizes {32,64,128,256}, shared/global kernels, and both edge modes
+   (plus a birth-on-6 device check). Built only when `-DBUILD_CUDA=ON` (`gol_cuda_tests`); needs a GPU
+   at run time. OpenCL is currently checked the same way only at runtime, via `--engine opencl --verify`
+   (passes across sizes and both edge modes); a dedicated `gol_opencl_tests` following the CUDA pattern
+   is still to be added.
 
 **Golly as an external oracle.** Golly is installed locally, including the headless `bgolly` runner
 (infinite grid, no edge effects). It runs our exact rule (`B36/S23`), so it is a second, independent
