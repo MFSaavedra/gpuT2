@@ -54,7 +54,7 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   `kernel.cl` is **read at runtime** (`clCreateProgramWithSource`) and mirrors `nextState` + the edge
   rule in plain C; kernel timed with `CL_QUEUE_PROFILING_ENABLE` command-queue events (excludes
   transfers). Verified **bit-for-bit against the `CpuEngine` oracle** at runtime via
-  `--engine opencl --verify` (no dedicated gtest yet — see Tests). Opt-in via `-DBUILD_OPENCL=ON`; on an
+  `--engine opencl --verify` and a `gol_opencl_tests` gtest (see Tests). Opt-in via `-DBUILD_OPENCL=ON`; on an
   NVIDIA box the platform is "NVIDIA CUDA", so it lowers through the same PTX/SASS backend as CUDA.
 
 - **Benchmarks** — run. `scripts/sweep.sh` drives the CPU(threads) + CUDA(block×shared) sweeps to
@@ -152,7 +152,7 @@ src/engines/   cpu/CpuEngine.cpp  cuda/CudaEngine.cu cuda/kernel.cu  opencl/Open
 include/gol/engines/  CudaEngine.hpp  cuda/kernel.cuh  OpenCLEngine.hpp
 src/render/    TextRenderer.cpp AnsiRenderer.cpp           (NullRenderer is header-only)
 src/patterns/  Pattern.cpp RleLoader.cpp
-tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp cuda_equivalence_test.cpp
+tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp cuda_equivalence_test.cpp opencl_equivalence_test.cpp
 patterns/      *.rle                                       (block, blinker, birth_on_six, highlife_replicator, highlife_spaceship)
 scripts/       sweep.sh                                    (CPU+CUDA benchmark sweeps -> results/*.csv)
 results/       sweep_cuda_opt.csv sweep_scaling.csv         (Pandas-ready sweep data)
@@ -205,13 +205,13 @@ In dependency order (`CpuEngine` is the oracle, so it is verified first):
 3. **RLE loader + `Pattern::applyTo`** — done. Parsing, stamping, clipping, missing-file errors
    (`rle_loader_test.cpp`). `compile_smoke_test.cpp` also includes every header so the scaffolding stays
    build-clean.
-4. **Cross-backend equivalence** — CUDA done (gtest); OpenCL verified at runtime, gtest pending.
-   `cuda_equivalence_test.cpp` seeds CUDA and CPU identically and asserts bit-for-bit equality against
-   the `CpuEngine` oracle across block sizes {32,64,128,256}, shared/global kernels, and both edge modes
-   (plus a birth-on-6 device check). Built only when `-DBUILD_CUDA=ON` (`gol_cuda_tests`); needs a GPU
-   at run time. OpenCL is currently checked the same way only at runtime, via `--engine opencl --verify`
-   (passes across sizes and both edge modes); a dedicated `gol_opencl_tests` following the CUDA pattern
-   is still to be added.
+4. **Cross-backend equivalence** — done for both GPU backends. `cuda_equivalence_test.cpp` and
+   `opencl_equivalence_test.cpp` seed their engine and CPU identically and assert bit-for-bit equality
+   against the `CpuEngine` oracle across block sizes {32,64,128,256}, shared/global (local) kernels, and
+   both edge modes (plus a birth-on-6 device check); each also checks the host↔device round-trip (no
+   step, isolating the transfer path) and buffer reuse across grid sizes on one engine instance. Built
+   only when the matching engine was configured — `gol_cuda_tests` under `-DBUILD_CUDA=ON`,
+   `gol_opencl_tests` under `-DBUILD_OPENCL=ON` — and each needs its GPU/OpenCL device at run time.
 
 **Golly as an external oracle.** Golly is installed locally, including the headless `bgolly` runner
 (infinite grid, no edge effects). It runs our exact rule (`B36/S23`), so it is a second, independent

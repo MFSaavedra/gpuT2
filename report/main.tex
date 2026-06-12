@@ -397,10 +397,13 @@ verifican, en orden de dependencia:
 	\item \textbf{Equivalencia secuencial \emph{vs.} paralela}: misma semilla y
 	      mismas generaciones producen un tablero idéntico bit a bit para distinto
 	      número de hilos y ambos modos de borde, incluso en grillas no divisibles.
-	\item \textbf{Equivalencia entre backends (CUDA)}: \texttt{cuda\_equivalence\_test.cpp}
-	      siembra CUDA y CPU igual y exige igualdad bit a bit contra el oráculo
-	      para los tamaños de bloque $\{32,64,128,256\}$, kernels global/compartido
-	      y ambos modos de borde. OpenCL seguirá el mismo patrón.
+	\item \textbf{Equivalencia entre backends (CUDA y OpenCL)}:
+	      \texttt{cuda\_equivalence\_test.cpp} y \texttt{opencl\_equivalence\_test.cpp}
+	      siembran cada backend de GPU y la CPU igual y exigen igualdad bit a bit
+	      contra el oráculo para los tamaños de bloque $\{32,64,128,256\}$, kernels
+	      global/compartido y ambos modos de borde. Además verifican el viaje de ida
+	      y vuelta \emph{host}\,$\leftrightarrow$\,\emph{device} (sin \emph{step}) y
+	      la reutilización de un mismo motor entre grillas de distinto tamaño.
 \end{itemize}
 
 Adicionalmente, el runner \texttt{bgolly} de Golly (grilla infinita) simula

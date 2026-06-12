@@ -71,3 +71,19 @@ if(GOL_CUDA_ENABLED)
     )
     gtest_discover_tests(gol_cuda_tests)
 endif()
+
+# Cross-backend equivalence: OpenCLEngine vs the CpuEngine oracle, plus the
+# host<->device round-trip and buffer-reuse lifecycle checks. Only built when the
+# OpenCL engine was configured (-DBUILD_OPENCL=ON). Requires an OpenCL device at
+# run time.
+if(GOL_OPENCL_ENABLED)
+    add_executable(gol_opencl_tests opencl_equivalence_test.cpp)
+    target_link_libraries(gol_opencl_tests
+        PRIVATE
+            gol_core
+            gol_cpu
+            gol_opencl
+            GTest::gtest_main
+    )
+    gtest_discover_tests(gol_opencl_tests)
+endif()

@@ -1355,11 +1355,14 @@ for (unsigned threads : {2u, 3u, 4u, 8u, 0u /* all hw cores */}) {
 }
 \end{sourcecode}
 
-\paragraph{The fourth test: cross-backend equivalence.} \emph{Done for CUDA,
-pending for OpenCL.} \texttt{cuda\_equivalence\_test.cpp} seeds CUDA and the
-\texttt{CpuEngine} oracle identically and asserts bit-for-bit equality across block
-sizes $\{32,64,128,256\}$, both kernels (global/shared) and both edge modes; OpenCL
-will follow the same pattern. An
+\paragraph{The fourth test: cross-backend equivalence.} \emph{Done for both GPU
+backends.} \texttt{cuda\_equivalence\_test.cpp} and
+\texttt{opencl\_equivalence\_test.cpp} seed their engine and the
+\texttt{CpuEngine} oracle identically and assert bit-for-bit equality across block
+sizes $\{32,64,128,256\}$, both kernels (global/shared) and both edge modes; each
+also checks the host\,$\leftrightarrow$\,device round-trip (\texttt{upload} then
+\texttt{download}, no \texttt{step}) and buffer reuse across grid sizes on one
+engine instance. An
 external oracle is also available: the headless \texttt{bgolly} runner simulates
 \texttt{B36/S23} on an infinite grid, and the \texttt{highlife\_replicator.rle} /
 \texttt{highlife\_spaceship.rle} fixtures already reproduce it bit-for-bit, so
@@ -1449,11 +1452,11 @@ benchmark sweeps (\texttt{scripts/sweep.sh}), the results CSVs, the analysis not
 (\texttt{analysis/results.ipynb}), and the Nsight (\texttt{ncu}/\texttt{nsys})
 profiling of the best CUDA kernel are also done and populate \texttt{main.tex}.
 
-\paragraph{Pending.} \texttt{OpenCLEngine} (\texttt{src/engines/opencl/}) is now
-implemented and verified at runtime against the CPU oracle
-(\texttt{--engine opencl --verify}). What remains is a dedicated
-\texttt{gol\_opencl\_tests} cross-backend gtest (mirroring the CUDA one) and
-folding its command-queue timing into the report's OpenCL profiling section.
+\paragraph{Pending.} All three backends are implemented and verified against the
+CPU oracle, including the OpenCL cross-backend gtest
+(\texttt{gol\_opencl\_tests}). What remains is mostly reporting: folding the
+OpenCL command-queue timing into the report's profiling section alongside the
+CUDA Nsight results.
 
 \paragraph{How a GPU backend slots in.} Implement \texttt{ISimEngine}: own two
 device buffers, \texttt{upload} once, ping-pong on the device inside
