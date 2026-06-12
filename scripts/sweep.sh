@@ -27,37 +27,37 @@
 #
 set -euo pipefail
 
-# --- configuration (override via env) -------------------------------------
+# --- configuration --------------------------------------------------------
 GOL="${GOL:-./build/gol}"
 OUTDIR="${OUTDIR:-results}"
-REPEATS="${REPEATS:-5}"          # max repeats per config (best-of in analysis)
-SKIP_S="${SKIP_S:-45}"           # skip a config if one run is predicted slower than this
+REPEATS="${REPEATS:-5}"
+SKIP_S="${SKIP_S:-45}"
 
-read -ra THREADS     <<< "${THREADS:-1 2 4 6 8 10 12}"          # CPU thread counts
-read -ra BLOCKS      <<< "${BLOCKS:-32 64 128 256 512}"          # CUDA threads/block
+read -ra THREADS     <<< "${THREADS:-1 2 4 6 8 10 12}"
+read -ra BLOCKS      <<< "${BLOCKS:-32 64 128 256 512}"
 read -ra OPT_GRIDS   <<< "${OPT_GRIDS:-1024 2048 4096 8192 16384}"
 read -ra SCALE_GRIDS <<< "${SCALE_GRIDS:-64 128 256 512 1024 2048 4096 8192 16384}"
-BEST_BLOCK="${BEST_BLOCK:-128}"  # CUDA config used for the scaling curve
 
-# Generations per grid size N: many for small grids (so per-step overhead is
-# visible above timer noise -- the point of the threshold analysis), few for
-# large grids (so a run stays ~tens of ms..~1 s). Unlisted N fall back to a
-# computed default in gens_for().
+BEST_CUDA_BLOCK="${BEST_CUDA_BLOCK:-128}"
+BEST_CUDA_SHARED="${BEST_CUDA_SHARED:-0}"
+
+BEST_OPENCL_BLOCK="${BEST_OPENCL_BLOCK:-128}"
+BEST_OPENCL_SHARED="${BEST_OPENCL_SHARED:-1}"
+
 declare -A GENS=(
   [64]=2000 [128]=1000 [256]=500 [512]=200 [1024]=100
   [2048]=40 [4096]=20 [8192]=10 [16384]=5
 )
 
-# Rough throughput (cells/s) for the runtime guard only -- not reported.
-RATE_CPU1=24000000        # ~24 Mcells/s on one core (flat, compute-bound)
-RATE_CUDA=25000000000     # ~25 Gcells/s
+RATE_CPU1=24000000
+RATE_CUDA=25000000000
+RATE_OPENCL=1100000000
 
-CUDA_OPT_CSV="$OUTDIR/sweep_cuda_opt.csv"
+GPU_OPT_CSV="$OUTDIR/sweep_gpu_opt.csv"
 SCALING_CSV="$OUTDIR/sweep_scaling.csv"
 
 # --- helpers --------------------------------------------------------------
 
-# gens_for N -> generation count for grid size N
 gens_for() {
   local n="$1"
   if [[ -n "${GENS[$n]:-}" ]]; then
@@ -67,24 +67,20 @@ gens_for() {
   fi
 }
 
-# cpu_rate THREADS -> estimated cells/s (cores scale linearly to 6 physical,
-# then hyperthreading adds ~0.3x per logical core).
 cpu_rate() {
   awk -v t="$1" -v r1="$RATE_CPU1" \
     'BEGIN{ eff = (t<=6) ? t : 6 + (t-6)*0.3; printf "%.0f", r1*eff }'
 }
 
-# plan_repeats PRED_SECONDS -> repeats to actually run (0 = skip this config)
 plan_repeats() {
   awk -v p="$1" -v R="$REPEATS" -v skip="$SKIP_S" 'BEGIN{
-    if (p > skip)     print 0;            # too slow: skip entirely
-    else if (p > 10)  print 1;            # one run only
-    else if (p > 2)   print (R>3?3:R);    # a few
-    else              print R;            # full repeats
+    if (p > skip)     print 0;
+    else if (p > 10)  print 1;
+    else if (p > 2)   print (R>3?3:R);
+    else              print R;
   }'
 }
 
-# run_repeats OUTFILE REP -- args after REP are passed to gol; appends REP rows.
 run_repeats() {
   local out="$1" rep="$2"; shift 2
   local i
@@ -97,72 +93,123 @@ run_repeats() {
   return 0
 }
 
+gpu_rate_for() {
+  local engine="$1"
+  if [[ "$engine" == "cuda" ]]; then
+    echo "$RATE_CUDA"
+  else
+    echo "$RATE_OPENCL"
+  fi
+}
+
 # --- preflight ------------------------------------------------------------
+
 if [[ ! -x "$GOL" ]]; then
   echo "error: '$GOL' not found or not executable." >&2
-  echo "build it first: cmake -S . -B build -DBUILD_CUDA=ON && cmake --build build" >&2
+  echo "build it first, e.g.:" >&2
+  echo "  cmake -S . -B build -DBUILD_CUDA=ON -DBUILD_OPENCL=ON" >&2
+  echo "  cmake --build build" >&2
   exit 1
 fi
+
 mkdir -p "$OUTDIR"
 
-# Warm up the CUDA context once so the first timed run isn't paying init cost
-# (best-of would also hide it, but this keeps even REPEATS=1 honest).
-"$GOL" --engine cuda -r 256 -c 256 -g 5 >/dev/null 2>&1 || true
+# Warm up GPU contexts.
+"$GOL" --engine cuda   -r 256 -c 256 -g 5 >/dev/null 2>&1 || true
+"$GOL" --engine opencl -r 256 -c 256 -g 5 >/dev/null 2>&1 || true
 
-# --- experiment A: CUDA block x shared sweep ------------------------------
-"$GOL" --csv-header > "$CUDA_OPT_CSV"
-echo "== experiment A: CUDA block x shared (-> $CUDA_OPT_CSV) ==" >&2
+# --- experiment A: CUDA/OpenCL block x shared/local sweep -----------------
+
+"$GOL" --csv-header > "$GPU_OPT_CSV"
+echo "== experiment A: GPU block x shared/local (-> $GPU_OPT_CSV) ==" >&2
+
 for n in "${OPT_GRIDS[@]}"; do
   g="$(gens_for "$n")"
   cells=$(( n * n * g ))
-  pred="$(awk -v c="$cells" -v r="$RATE_CUDA" 'BEGIN{ printf "%.3f", c/r }')"
-  rep="$(plan_repeats "$pred")"
-  [[ "$rep" -eq 0 ]] && { echo "[A] N=$n  SKIP (pred ${pred}s/run)" >&2; continue; }
-  for block in "${BLOCKS[@]}"; do
-    for shared in 0 1; do
-      args=(--engine cuda --block "$block" -r "$n" -c "$n" -g "$g")
-      [[ "$shared" -eq 1 ]] && args+=(--shared)
-      printf '[A] N=%-5s block=%-3s shared=%s G=%-4s x%s\n' \
-        "$n" "$block" "$shared" "$g" "$rep" >&2
-      run_repeats "$CUDA_OPT_CSV" "$rep" "${args[@]}" || true
+
+  for engine in cuda opencl; do
+    rate="$(gpu_rate_for "$engine")"
+    pred="$(awk -v c="$cells" -v r="$rate" 'BEGIN{ printf "%.3f", c/r }')"
+    rep="$(plan_repeats "$pred")"
+
+    if [[ "$rep" -eq 0 ]]; then
+      printf '[A] %-6s N=%-5s SKIP (pred %ss/run)\n' "$engine" "$n" "$pred" >&2
+      continue
+    fi
+
+    for block in "${BLOCKS[@]}"; do
+      for shared in 0 1; do
+        args=(--engine "$engine" --block "$block" -r "$n" -c "$n" -g "$g")
+        [[ "$shared" -eq 1 ]] && args+=(--shared)
+
+        printf '[A] %-6s N=%-5s block=%-3s shared=%s G=%-4s x%s\n' \
+          "$engine" "$n" "$block" "$shared" "$g" "$rep" >&2
+
+        run_repeats "$GPU_OPT_CSV" "$rep" "${args[@]}" || true
+      done
     done
   done
 done
 
-# --- experiment B: scaling (CPU threads + CUDA best) vs N ------------------
+# --- experiment B: scaling vs N -------------------------------------------
+
 "$GOL" --csv-header > "$SCALING_CSV"
 echo "== experiment B: scaling vs N (-> $SCALING_CSV) ==" >&2
+
 for n in "${SCALE_GRIDS[@]}"; do
   g="$(gens_for "$n")"
   cells=$(( n * n * g ))
 
-  # CPU, swept over thread counts
+  # CPU, swept over thread counts.
   for t in "${THREADS[@]}"; do
     rate="$(cpu_rate "$t")"
     pred="$(awk -v c="$cells" -v r="$rate" 'BEGIN{ printf "%.3f", c/r }')"
     rep="$(plan_repeats "$pred")"
+
     if [[ "$rep" -eq 0 ]]; then
-      printf '[B] cpu  N=%-5s t=%-2s SKIP (pred %ss/run)\n' "$n" "$t" "$pred" >&2
+      printf '[B] cpu    N=%-5s t=%-2s SKIP (pred %ss/run)\n' "$n" "$t" "$pred" >&2
       continue
     fi
-    printf '[B] cpu  N=%-5s t=%-2s G=%-4s x%s (pred %ss/run)\n' \
-      "$n" "$t" "$g" "$rep" "$pred" >&2
+
+    printf '[B] cpu    N=%-5s t=%-2s G=%-4s x%s\n' "$n" "$t" "$g" "$rep" >&2
     run_repeats "$SCALING_CSV" "$rep" --engine cpu --threads "$t" \
       -r "$n" -c "$n" -g "$g" || true
   done
 
-  # CUDA, best config
-  pred="$(awk -v c="$cells" -v r="$RATE_CUDA" 'BEGIN{ printf "%.3f", c/r }')"
+  # CUDA best config.
+  rate="$(gpu_rate_for cuda)"
+  pred="$(awk -v c="$cells" -v r="$rate" 'BEGIN{ printf "%.3f", c/r }')"
   rep="$(plan_repeats "$pred")"
+
   if [[ "$rep" -ne 0 ]]; then
-    printf '[B] cuda N=%-5s block=%-3s G=%-4s x%s\n' "$n" "$BEST_BLOCK" "$g" "$rep" >&2
-    run_repeats "$SCALING_CSV" "$rep" --engine cuda --block "$BEST_BLOCK" \
-      -r "$n" -c "$n" -g "$g" || true
+    args=(--engine cuda --block "$BEST_CUDA_BLOCK" -r "$n" -c "$n" -g "$g")
+    [[ "$BEST_CUDA_SHARED" -eq 1 ]] && args+=(--shared)
+
+    printf '[B] cuda   N=%-5s block=%-3s shared=%s G=%-4s x%s\n' \
+      "$n" "$BEST_CUDA_BLOCK" "$BEST_CUDA_SHARED" "$g" "$rep" >&2
+
+    run_repeats "$SCALING_CSV" "$rep" "${args[@]}" || true
+  fi
+
+  # OpenCL best config.
+  rate="$(gpu_rate_for opencl)"
+  pred="$(awk -v c="$cells" -v r="$rate" 'BEGIN{ printf "%.3f", c/r }')"
+  rep="$(plan_repeats "$pred")"
+
+  if [[ "$rep" -ne 0 ]]; then
+    args=(--engine opencl --block "$BEST_OPENCL_BLOCK" -r "$n" -c "$n" -g "$g")
+    [[ "$BEST_OPENCL_SHARED" -eq 1 ]] && args+=(--shared)
+
+    printf '[B] opencl N=%-5s block=%-3s shared=%s G=%-4s x%s\n' \
+      "$n" "$BEST_OPENCL_BLOCK" "$BEST_OPENCL_SHARED" "$g" "$rep" >&2
+
+    run_repeats "$SCALING_CSV" "$rep" "${args[@]}" || true
   fi
 done
 
 # --- summary --------------------------------------------------------------
+
 echo "== done ==" >&2
 printf 'rows written: %s (%s), %s (%s)\n' \
-  "$(($(wc -l < "$CUDA_OPT_CSV") - 1))" "$CUDA_OPT_CSV" \
+  "$(($(wc -l < "$GPU_OPT_CSV") - 1))" "$GPU_OPT_CSV" \
   "$(($(wc -l < "$SCALING_CSV") - 1))" "$SCALING_CSV" >&2
