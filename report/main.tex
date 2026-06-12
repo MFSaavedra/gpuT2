@@ -555,8 +555,10 @@ engañosa}: hay que separar las \emph{solicitudes} ---que la caché puede absorb
 (Sección~\ref{sec:profiling}) muestra que la L2 sirve el $\sim$88\% de esas
 solicitudes, de modo que la DRAM solo ve $q\approx2$ bytes/celda y queda al
 $\approx20\%$ de su ancho de banda. La cota de DRAM \emph{pertinente} es por tanto la
-de $q=2$, es decir $288/2 = 144$~Gcélulas/s, y el kernel alcanza $\approx28$--$32$, o
-sea solo $\approx20\%$ de ese techo. \textbf{La GPU no está limitada por el ancho de
+de $q=2$, es decir $288/2 = 144$~Gcélulas/s, y el kernel alcanza $\approx25$--$37$
+---un pico que \emph{supera} la cota ingenua de $q{=}10$ ($28{,}8$), prueba empírica de
+que la caché recorta el tráfico a DRAM---, o sea solo $\approx17$--$26\%$ de ese techo.
+\textbf{La GPU no está limitada por el ancho de
 banda de DRAM} sino por la tubería de memoria en chip (L2/LSU) y la latencia de uso de
 las cargas: cómputo y tubería de memoria quedan co-limitados al $\sim$65\% de su
 máximo, con la mayoría de los ciclos detenidos esperando los datos de las cargas. El
@@ -668,8 +670,8 @@ La Tabla~\ref{tab:validacion} contrasta las cotas con la medición y el perfilam
 (Sección~\ref{sec:profiling}). El hallazgo central corrige la intuición inicial: el
 kernel global \textbf{no está limitado por el ancho de banda de DRAM}. La L2 sirve el
 $\sim$88\% de las solicitudes, así que la DRAM solo ve $q\approx2$ B/celda y opera al
-$\approx20\%$ de su capacidad; el kernel alcanza $\approx28$--$32$~Gcélulas/s, apenas
-el $\approx20\%$ de la cota de DRAM de $144$~Gcélulas/s, y su límite real es la tubería
+$\approx20\%$ de su capacidad; el kernel alcanza $\approx25$--$37$~Gcélulas/s, apenas
+el $\approx17$--$26\%$ de la cota de DRAM de $144$~Gcélulas/s, y su límite real es la tubería
 de memoria en chip y la latencia de las cargas ($\sim$65\% de SOL). La CPU, en cambio,
 se queda $\sim$130$\times$ por debajo de su techo de DRAM ---limitada por cómputo---.
 
@@ -683,14 +685,14 @@ se queda $\sim$130$\times$ por debajo de su techo de DRAM ---limitada por cómpu
 		\toprule
 		\textbf{Backend / config.} & \textbf{Cota DRAM} & \textbf{Medido} & \textbf{\% cota} \\
 		\midrule
-		GPU global (DRAM, L2 da $q\approx2$) & 144 Gcél/s    & 25--32 (máx $32{,}1$) Gcél/s & $\approx20\%$ \\
+		GPU global (DRAM, L2 da $q\approx2$) & 144 Gcél/s    & 25--37 (máx $\approx37$) Gcél/s & $\approx26\%$ \\
 		CPU, 12 hilos (DRAM, $q=2$)          & 21{,}3 Gcél/s & $\approx 0{,}16$ Gcél/s       & $0{,}75\%$ \\
 		\bottomrule
 	\end{tabular}
 \end{table}
 
 En suma, el \textbf{máximo obtenible} en este proyecto queda así: la GPU rinde
-$\approx 25$--$32$~Gcélulas/s, no contra el techo de DRAM ($144$) sino contra el de su
+$\approx 25$--$37$~Gcélulas/s, no contra el techo de DRAM ($144$) sino contra el de su
 tubería de memoria y latencia. Hay, por tanto, margen ---ocultar mejor la latencia con
 más paralelismo de instrucción (varias celdas por hilo) podría acercarla al techo de
 DRAM---; reducir el tráfico (empaquetar bits) ayudaría poco mientras la DRAM esté al
@@ -737,8 +739,13 @@ tamaño de grilla. La CPU secuencial es prácticamente \textbf{plana} en $\appro
 27$~Mcélulas/s: como se anticipó en la Sección~\ref{sec:cota-cpu}, está limitada por
 cómputo, no por memoria. La CPU paralela se estabiliza en $\approx 150$~Mcélulas/s, y
 ambas GPU dominan por \textbf{dos a tres órdenes de magnitud}. \textbf{CUDA y OpenCL
-son prácticamente indistinguibles} ---sus curvas de \emph{kernel} se superponen---,
-con el máximo ($\approx 35$--$37$~Gcélulas/s) en $N=2048$; más allá decae levemente
+rinden a la par}: sus curvas de \emph{kernel} se solapan salvo por el ruido de
+medición. Cada punto de GPU arrastra una dispersión de $\sim$25--30\% entre
+repeticiones ---por la variabilidad del reloj \emph{boost} de esta GPU Max-Q acotada a
+60~W---, mayor que cualquier diferencia entre los dos motores; las pequeñas ventajas
+de uno u otro en la Tabla~\ref{tab:cpugpu} (p.\,ej.\ en $N{=}4096$) caen dentro de ese
+ruido y no deben leerse como que un \emph{backend} supere al otro. El máximo,
+$\approx 35$--$37$~Gcélulas/s, se da en $N\approx2048$; más allá decae levemente
 (efecto de reloj/SOL: el perfilamiento muestra que la tasa de acierto de L2 se
 mantiene en $\approx88\%$ y la DRAM al $\approx20\%$ también en $N=8192$). Las curvas
 \texttt{(wall)} incluyen el costo de lanzamiento por paso: se separan del
@@ -798,8 +805,11 @@ rendimiento, una penalización de $\approx 1{,}8$--$2{,}1\times$--- confirmando 
 predicción del modelo (Sección~\ref{sec:cota-gpu}): para un \emph{stencil} de 1 byte
 la caché L2 ya sirve la reutilización, y la barrera, el halo y los accesos
 byte-a-byte a la SRAM cuestan más de lo que ahorran. \textbf{OpenCL reproduce el
-patrón de CUDA} ---mismo backend en NVIDIA--- con un pico de $\approx 37$~Gcélulas/s
-frente a $\approx 35$ de CUDA. La Tabla~\ref{tab:opt} resume el mejor bloque por $N$.
+patrón de CUDA} ---mismo backend PTX/SASS en NVIDIA--- y rinde a la par: su pico
+($\approx 37$~Gcélulas/s) queda nominalmente sobre el de CUDA ($\approx 35$), pero esa
+diferencia ($\sim$5\%) cae dentro del ruido de medición (Sección~\ref{sec:res-cpu-gpu}),
+así que ambos motores deben considerarse empatados. La Tabla~\ref{tab:opt} resume el
+mejor bloque por $N$.
 
 \insertimage{bench_block_shared}{width=\linewidth}{Rendimiento (Gcélulas/s) por
 tamaño de bloque/\emph{work-group}, memoria global (sólido) frente a local/compartida
@@ -834,8 +844,8 @@ tamaño de bloque/\emph{work-group}, memoria global (sólido) frente a local/com
 
 El \emph{speed-up} (Ecuación~\ref{eq:speedup}, panel izquierdo de la
 Figura~\ref{fig:speedup}) alcanza $\approx 1300\times$ frente a la versión secuencial
-y $\approx 240$--$250\times$ frente a la mejor CPU paralela (OpenCL marginalmente por
-encima de CUDA), con su máximo en $N=2048$. Conviene leer ambos números junto con la
+y $\approx 240$--$250\times$ frente a la mejor CPU paralela (CUDA y OpenCL empatados
+dentro del ruido de medición), con su máximo en $N=2048$. Conviene leer ambos números junto con la
 cota de la Sección~\ref{sec:cota-speedup}: el cociente ``limpio'' de anchos de banda
 predice $\approx 6{,}8\times$, y el $\sim 250\times$ medido es mucho mayor porque la
 CPU base no está en su techo de memoria (opera a $\sim 1/150$ de él), no porque el
@@ -959,9 +969,9 @@ hallazgos principales:
 	\item \textbf{CPU.} Escala hasta los 6 núcleos físicos ($\approx 5{,}4\times$); el
 	      \emph{hyperthreading} aporta poco y, por la sincronización con barrera,
 	      desbalancea en 8 y 10 hilos.
-	\item \textbf{GPU.} $\approx 35$~Gcélulas/s en CUDA y $\approx 37$ en OpenCL: en
-	      NVIDIA \textbf{OpenCL iguala a CUDA} porque baja por el mismo backend
-	      PTX/SASS. El perfilamiento revela que \emph{no} la limita el ancho de banda
+	\item \textbf{GPU.} $\approx 35$--$37$~Gcélulas/s, con \textbf{CUDA y OpenCL
+	      empatados dentro del ruido de medición} (en NVIDIA ambos bajan por el mismo
+	      backend PTX/SASS). El perfilamiento revela que \emph{no} la limita el ancho de banda
 	      de DRAM (al $\approx20\%$, pues la L2 sirve el $88\%$ de las solicitudes)
 	      sino la tubería L2/LSU y la latencia ($\sim$65\% de SOL); hay margen de
 	      mejora con más paralelismo de instrucción.

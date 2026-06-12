@@ -64,11 +64,10 @@
 	invariant that shapes every design decision (\emph{the three backends
 	must compute byte-for-byte identical boards so that any difference in
 	speed is the real result}), and then walks the source code function by
-	function, with the C\texttt{++} files explained line by line. At the time
-	of writing the CPU backend is complete and acts as the correctness
-	oracle; the CUDA backend is also complete (verified bit-for-bit against it).
-		The OpenCL backend is scaffolded but not yet
-	implemented. The headline metric is fixed throughout:
+	function, with the C\texttt{++} files explained line by line. All three
+	backends are complete: the CPU backend is the correctness oracle, and the
+	CUDA and OpenCL backends are each verified bit-for-bit against it. The
+	headline metric is fixed throughout:
 	$\text{Mcells/s} = (\text{rows}\times\text{cols}\times\text{gens}) /
 	(t \times 10^{6})$, measured against a no-op renderer so that rendering
 	and host\,$\leftrightarrow$\,device transfers never pollute the number.
@@ -221,6 +220,7 @@ and impose no link dependency.
 		\texttt{include/gol/engines/CpuEngine.hpp} & CPU engine declaration & \ref{sec:cpu} \\
 		\texttt{include/gol/engines/CudaEngine.hpp} & CUDA engine declaration & \ref{sec:cuda} \\
 		\texttt{include/gol/engines/cuda/kernel.cuh} & CUDA launcher declaration & \ref{sec:cuda} \\
+		\texttt{include/gol/engines/OpenCLEngine.hpp} & OpenCL engine declaration & \ref{sec:opencl} \\
 		\texttt{include/gol/render/NullRenderer.hpp} & No-op renderer (HO) & \ref{sec:render} \\
 		\texttt{include/gol/render/TextRenderer.hpp} & Text renderer declaration & \ref{sec:render} \\
 		\texttt{include/gol/render/AnsiRenderer.hpp} & In-place ANSI renderer decl. & \ref{sec:render} \\
@@ -231,6 +231,8 @@ and impose no link dependency.
 		\texttt{src/engines/cpu/CpuEngine.cpp}   & CPU engine (seq + parallel) & \ref{sec:cpu} \\
 		\texttt{src/engines/cuda/CudaEngine.cu}  & CUDA engine implementation & \ref{sec:cuda} \\
 		\texttt{src/engines/cuda/kernel.cu}      & CUDA step kernels & \ref{sec:cuda} \\
+		\texttt{src/engines/opencl/OpenCLEngine.cpp} & OpenCL engine implementation & \ref{sec:opencl} \\
+		\texttt{src/engines/opencl/kernel.cl}    & OpenCL kernels (read at runtime) & \ref{sec:opencl} \\
 		\texttt{src/patterns/RleLoader.cpp}      & RLE decoding & \ref{sec:patterns} \\
 		\texttt{src/patterns/Pattern.cpp}        & Stamping a pattern onto a grid & \ref{sec:patterns} \\
 		\texttt{src/render/TextRenderer.cpp}     & ASCII frame dump & \ref{sec:render} \\
@@ -357,7 +359,7 @@ GOL_FN unsigned char nextState(unsigned char alive, int neighbors) {
 and CUDA therefore \emph{cannot} diverge on the rule --- they share source.
 
 \paragraph{The acknowledged exception.} OpenCL C cannot \texttt{\#include} a
-C\texttt{++} header, so the plan is to mirror this function in \texttt{kernel.cl}
+C\texttt{++} header, so this function is mirrored in \texttt{kernel.cl}
 (read at runtime, kept diff-able against this header). The project deliberately
 does \emph{not} chase zero duplication between CUDA and OpenCL: two duplicated
 copies that are easy to eyeball-diff beat one clever abstraction that is hard to
@@ -1047,6 +1049,45 @@ binary drives the whole sweep. The CUDA target is opt-in
 (\texttt{-DBUILD\_CUDA=ON}), built for \texttt{sm\_75} (the GTX 1660 Ti) with
 \texttt{-lineinfo} so Nsight Compute can attribute time to source lines.
 
+\section{The OpenCL engine --- \texttt{OpenCLEngine.cpp} and \texttt{kernel.cl}}
+\label{sec:opencl}
+
+\texttt{OpenCLEngine} is the CUDA engine's twin: one work-item per cell over a 2D
+NDRange, two device buffers, a device-side ping-pong, and the same two runtime
+options (\texttt{--block} sizes the work-group, \texttt{--shared} selects the
+local-memory kernel). The design rationale is identical to Section
+\ref{sec:cuda}; this section covers only what differs.
+
+\paragraph{The kernel is read at runtime, not compiled with the host.} CUDA's
+kernels are compiled ahead of time by \texttt{nvcc}; OpenCL's are not. The engine
+reads \texttt{src/engines/opencl/kernel.cl} from disk at start-up and hands the
+source to \texttt{clCreateProgramWithSource} + \texttt{clBuildProgram}, which the
+NVIDIA driver JIT-compiles for the present device. This is why \texttt{kernel.cl}
+must stay diff-able against \texttt{LifeRules.hpp}: it is plain C and cannot
+\texttt{\#include} the C\texttt{++} header, so it carries a hand-mirrored copy of
+\texttt{nextState} and the edge rule (Section \ref{sec:liferules}). Its two kernels
+\texttt{life\_global} and \texttt{life\_local} mirror CUDA's
+\texttt{lifeGlobal}\,/\,\texttt{lifeShared}; \texttt{life\_local} stages a
+$(bx{+}2)\times(by{+}2)$ tile plus halo into a \texttt{\_\_local} buffer and
+synchronises with \texttt{barrier(CLK\_LOCAL\_MEM\_FENCE)}.
+
+\paragraph{Timing uses command-queue events.} The queue is created with
+\texttt{CL\_QUEUE\_PROFILING\_ENABLE}; each \texttt{step} enqueues the kernel via
+\texttt{clEnqueueNDRangeKernel}, waits on its event, and subtracts
+\texttt{CL\_PROFILING\_COMMAND\_START} from \texttt{\_END} to get the device
+execution time --- the OpenCL analogue of CUDA's \texttt{cudaEvent\_t} bracket, and
+likewise excluding the host\,$\leftrightarrow$\,device copies.
+
+\paragraph{Same backend as CUDA on NVIDIA.} On an NVIDIA box the OpenCL platform
+is ``NVIDIA CUDA'', so the JIT lowers \texttt{kernel.cl} through the same PTX/SASS
+backend as the CUDA path. The two engines therefore perform within measurement
+noise of each other: the $\sim$5\% gap that shows up between their peaks is smaller
+than the GPU's $\sim$25--30\% run-to-run boost-clock variance (Section
+\ref{sec:timing}), so neither is meaningfully faster. The engine is opt-in
+(\texttt{-DBUILD\_OPENCL=ON}) and verified bit-for-bit against the
+\texttt{CpuEngine} oracle, both at runtime (\texttt{--engine opencl --verify}) and in
+\texttt{gol\_opencl\_tests}.
+
 \section{The pattern pipeline --- \texttt{RleLoader.cpp} and \texttt{Pattern.cpp}}
 \label{sec:patterns}
 
@@ -1395,9 +1436,10 @@ For the sweep data the binary has a CSV mode: \texttt{--csv} prints one data row
 kernel\_ms, wall\_ms, mcells\_kernel, mcells\_wall}) and \texttt{--csv-header}
 prints just the header and exits, so a script writes the header once and appends
 a row per configuration straight into Pandas. In practice that script is
-\texttt{scripts/sweep.sh} (the CPU-threads and CUDA block\,$\times$\,shared sweeps,
-with an adaptive-repeats runtime guard), and \texttt{analysis/results.ipynb} turns
-the resulting \texttt{results/*.csv} into the report's figures. The speed-up is
+\texttt{scripts/sweep.sh} (the CPU-threads and CUDA/OpenCL
+block\,$\times$\,shared/local sweeps, with an adaptive-repeats runtime guard), and
+\texttt{analysis/results.ipynb} turns the resulting \texttt{results/linux/*.csv} into
+the report's figures. The speed-up is
 
 \begin{equation}
 	S(N) = \frac{T_{\text{CPU}}(N)}{T_{\text{GPU}}(N)}.
@@ -1420,12 +1462,14 @@ latency-bound on cache-served loads, not bandwidth-bound on DRAM.
 classic stencil optimisation stages a tile plus a halo into shared memory to
 reuse neighbour reads. Here each cell is one byte and the L2 already serves the
 reuse, so the staging saves no DRAM traffic ($\approx 2$ B/cell either way) while
-adding a barrier and dropping L1 reuse --- it runs $\approx 0.55\times$ the global
-kernel. Explaining \emph{why} is one of the more interesting parts of the report.
+adding a barrier and dropping L1 reuse --- it runs $\approx 0.5\times$ the global
+kernel (a $\approx 1.8$--$2.1\times$ penalty), on both CUDA and OpenCL. Explaining
+\emph{why} is one of the more interesting parts of the report.
 
 \paragraph{Launch overhead dominates at small grids.} With few cells there are too
 few blocks to fill the SMs, so per-step launch cost dominates: the GPU's
-\texttt{wall}/\texttt{kernel} efficiency falls (to $\approx 40\%$ at $N=64$),
+\texttt{wall}/\texttt{kernel} efficiency falls (to $\approx 26$--$40\%$ at $N=64$,
+lower for OpenCL whose faster kernel makes the fixed launch cost weigh more),
 recovering by $N\approx 1024$--$2048$. Because the metric times the kernel/loop with
 the \texttt{NullRenderer} (transfers excluded), the GPU still outruns the
 compute-bound CPU at every measured $N$; a classic $S(N) < 1$ regime appears only
@@ -1442,21 +1486,26 @@ hardware.
 \label{sec:roadmap}
 
 \paragraph{Done.} The backend-agnostic core, the CPU engine (sequential and
-parallel in one path), both renderers, the RLE pipeline, the CLI, and the
+parallel in one path), both renderers, the RLE pipeline, the CLI, the
 \texttt{CudaEngine} (global + shared kernels, \texttt{--block}/\texttt{--shared},
-cudaEvent timing), and the CSV benchmark-output mode
+cudaEvent timing) and the \texttt{OpenCLEngine} (its
+\texttt{life\_global}/\texttt{life\_local} twin, runtime-loaded \texttt{kernel.cl},
+queue-event timing; Section \ref{sec:opencl}), and the CSV benchmark-output mode
 (\texttt{--csv}/\texttt{--csv-header}). Test suites: CPU rules,
-sequential-vs-parallel, RLE loader, and the CUDA-vs-CPU cross-backend
-equivalence (Section \ref{sec:cuda}). The CPU engine is the reference oracle. The
-benchmark sweeps (\texttt{scripts/sweep.sh}), the results CSVs, the analysis notebook
+sequential-vs-parallel, RLE loader, and the cross-backend equivalence of \emph{both}
+GPU engines against the CPU oracle (Sections \ref{sec:cuda}, \ref{sec:opencl}). The
+CPU engine is the reference oracle. The benchmark sweeps (\texttt{scripts/sweep.sh},
+now CPU + CUDA + OpenCL), the results CSVs, the analysis notebook
 (\texttt{analysis/results.ipynb}), and the Nsight (\texttt{ncu}/\texttt{nsys})
 profiling of the best CUDA kernel are also done and populate \texttt{main.tex}.
 
-\paragraph{Pending.} All three backends are implemented and verified against the
-CPU oracle, including the OpenCL cross-backend gtest
-(\texttt{gol\_opencl\_tests}). What remains is mostly reporting: folding the
-OpenCL command-queue timing into the report's profiling section alongside the
-CUDA Nsight results.
+\paragraph{Pending / future work.} All three backends are implemented, verified
+against the CPU oracle (including \texttt{gol\_opencl\_tests}) and benchmarked --- the
+OpenCL results are folded into the report alongside CUDA. What is left is optional: a
+\texttt{GuiRenderer} (the one planned-but-absent strategy), and the performance ideas
+the report raises (a vectorised AVX2 CPU path; more instruction-level parallelism per
+GPU thread to hide load latency). Nsight Compute profiles only CUDA, so OpenCL relies
+on its in-program queue-event timing.
 
 \paragraph{How a GPU backend slots in.} Implement \texttt{ISimEngine}: own two
 device buffers, \texttt{upload} once, ping-pong on the device inside
