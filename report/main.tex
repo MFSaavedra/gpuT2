@@ -71,11 +71,11 @@
 	muerta también nace si tiene exactamente $6$ vecinos vivos (la regla
 	\emph{HighLife}, \texttt{B36/S23}). El núcleo del proyecto es agnóstico al
 	backend: una grilla plana común, una única regla compartida y dos interfaces
-	intercambiables (motor de simulación y \emph{renderer}). La implementación de CUDA se compara
+	intercambiables (motor de simulación y \emph{renderer}). Las implementaciones de CUDA y OpenCL se comparan
 	bit a bit contra la CPU como oráculo. Se comparan dos variaciones de
 	configuración del kernel (tamaño de bloque y uso de memoria compartida) y se
 	analiza a partir de qué tamaño de cuadrícula $N \times M$ conviene usar la GPU. La
-	GPU alcanza hasta $\approx 200\times$ sobre la mejor CPU paralela; el perfilamiento
+	GPU (CUDA y OpenCL, prácticamente empatadas) alcanza hasta $\approx 250\times$ sobre la mejor CPU paralela; el perfilamiento
 	revela que el kernel está limitado por la latencia de su tubería de memoria en chip
 	---no por el ancho de banda de DRAM, que queda al $\approx20\%$--- y que la memoria
 	compartida resulta contraproducente para este \emph{stencil} de 1 byte.
@@ -650,12 +650,12 @@ Si \emph{ambos} backends estuvieran limitados por memoria con el mismo $q$, el
 \end{equation}
 %
 Este es el \emph{speed-up} ``justo'' que predice el hardware. El valor medido (GPU
-contra 12 hilos) será mucho mayor ---del orden de $200\times$--- precisamente porque
+contra 12 hilos) será mucho mayor ---del orden de $250\times$--- precisamente porque
 la CPU \textbf{no} está en su techo de memoria: opera a $\sim$1/150 de él
-(Sección~\ref{sec:cota-cpu}). Es decir, un \emph{speed-up} de $\sim$200$\times$ no
-mide una ventaja de hardware de $200\times$. Conviene matizar: ni la CPU ni la GPU
+(Sección~\ref{sec:cota-cpu}). Es decir, un \emph{speed-up} de $\sim$250$\times$ no
+mide una ventaja de hardware de $250\times$. Conviene matizar: ni la CPU ni la GPU
 saturan su DRAM ---la CPU está limitada por cómputo y la GPU por la latencia de su
-tubería de memoria (Sección~\ref{sec:cota-gpu})---. El $200\times$ refleja, entonces,
+tubería de memoria (Sección~\ref{sec:cota-gpu})---. El $250\times$ refleja, entonces,
 el paralelismo de la GPU ocultando latencia frente a una CPU escalar; el cociente de
 anchos de banda ($\sim$6{,}8$\times$) es solo una referencia de ``qué pasaría si ambos
 saturaran su DRAM''. El informe reporta ambos para no confundir la ventaja de
