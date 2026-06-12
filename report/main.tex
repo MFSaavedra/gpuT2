@@ -358,15 +358,22 @@ a líneas de código fuente.
 \subsection{Implementación paralela en OpenCL}
 \label{sec:impl-opencl}
 
-\textit{Pendiente.} El motor de OpenCL (\texttt{OpenCLEngine}) aún no está
-implementado. Seguirá el mismo diseño que CUDA: dos buffers de \emph{device},
-\emph{ping-pong} en el \emph{device}, los mismos dos kernels (global y con memoria
-local) y los mismos botones \texttt{--block}/\texttt{--shared}. La regla y el
-manejo de borde se replicarán en un \texttt{kernel.cl} en C plano, leído en tiempo
-de ejecución y mantenido diff-eable contra \texttt{LifeRules.hpp}. El cronometraje
-del kernel usará eventos de la cola de comandos con
-\texttt{CL\_QUEUE\_PROFILING\_ENABLE}. Se verificará bit a bit contra el oráculo
-de CPU, igual que CUDA.
+El motor de OpenCL (\texttt{OpenCLEngine}) reproduce el diseño de CUDA: un
+\emph{work-item} por celda sobre un \emph{NDRange} 2D, dos buffers de \emph{device}
+en \emph{ping-pong} en el \emph{device} (lee A, escribe B, intercambia) y los mismos
+dos kernels seleccionables ---\texttt{life\_global} (memoria global) y
+\texttt{life\_local} (memoria local con halo de 1 celda, vía \texttt{--shared})---,
+con el \emph{work-group} mapeado a un tamaño local de 32 de ancho, como el
+\emph{tile} de CUDA. La regla y el manejo de borde se replican en un
+\texttt{kernel.cl} en C plano, \textbf{leído en tiempo de ejecución}
+(\texttt{clCreateProgramWithSource}) y mantenido diff-eable contra
+\texttt{LifeRules.hpp}. El cronometraje del kernel usa eventos de la cola de comandos
+con \texttt{CL\_QUEUE\_PROFILING\_ENABLE} (excluye las transferencias). Se verifica
+\textbf{bit a bit contra el oráculo de CPU}, igual que CUDA, en tiempo de ejecución
+(\texttt{--engine opencl --verify}) y en un test de \texttt{gtest}. En una máquina
+NVIDIA la plataforma es ``NVIDIA CUDA'', así que OpenCL baja por el mismo backend
+PTX/SASS que CUDA ---y, como muestran los resultados
+(Sección~\ref{sec:res-opciones}), rinde casi igual.
 
 \subsection{Variaciones de configuración}
 \label{sec:variaciones}
@@ -374,7 +381,7 @@ de CPU, igual que CUDA.
 De las tres opciones del enunciado se eligieron dos:
 
 \begin{enumerate}
-	\item \textbf{Tamaño de bloque} $\in \{32, 64, 128, 256\}$ (botón \texttt{--block}).
+	\item \textbf{Tamaño de bloque} (o \emph{work-group}) $\in \{32, 64, 128, 256, 512\}$ (botón \texttt{--block}).
 	\item \textbf{Memoria local por bloque} \emph{vs.} sin memoria local (botón \texttt{--shared}).
 \end{enumerate}
 
@@ -702,10 +709,11 @@ Las mediciones se realizan en un equipo con procesador Intel Core i7-9750H
 GDDR6 de 192 bits, $288$~GB/s), bajo Linux con CUDA y compilación en C\texttt{++}23.
 
 Los barridos se automatizan con \texttt{scripts/sweep.sh}, que invoca el binario en
-modo CSV y produce dos archivos en \texttt{results/}: uno para el barrido de
-optimizaciones de CUDA (bloque $\times$ memoria compartida) y otro para el
-escalamiento CPU/GPU según el tamaño de grilla; el análisis y las figuras se generan
-con el cuaderno \texttt{analysis/results.ipynb}. Cada configuración se ejecuta varias
+modo CSV y produce dos archivos (en \texttt{results/linux/} para esta corrida en
+Linux): uno para el barrido de optimizaciones de GPU ---CUDA y OpenCL, bloque
+$\times$ memoria local/compartida--- y otro para el escalamiento CPU/GPU según el
+tamaño de grilla; el análisis y las figuras se generan con el cuaderno
+\texttt{analysis/results.ipynb}. Cada configuración se ejecuta varias
 veces y se conserva el \textbf{mejor} tiempo (menor ruido de \emph{turbo} y
 contención); todas las corridas usan el \texttt{NullRenderer} (sin dibujado ni
 transferencias en el lazo cronometrado), bordes acotados y la misma semilla.
@@ -713,8 +721,9 @@ transferencias en el lazo cronometrado), bordes acotados y la misma semilla.
 Se miden grillas cuadradas $N \in \{64, 128, 256, 512, 1024, 2048, 4096, 8192,
 16384\}$. El número de generaciones se escala con $N$ (muchas para grillas pequeñas,
 pocas para las grandes) de modo que cada corrida sea medible pero acotada. El motor
-de CPU se barre en $\{1,2,4,6,8,10,12\}$ hilos (1 = secuencial) y el de CUDA en
-bloques $\{32,64,128,256,512\}$ con y sin memoria compartida. Antes de los barridos
+de CPU se barre en $\{1,2,4,6,8,10,12\}$ hilos (1 = secuencial) y los de CUDA y
+OpenCL en bloques/\emph{work-groups} $\{32,64,128,256,512\}$ con y sin memoria
+local/compartida. Antes de los barridos
 se verificó que la GPU operara a plena velocidad (límite de potencia de 60~W, reloj
 de memoria 6001~MHz): un \emph{cap} de potencia rebajaría el ancho de banda efectivo
 e invalidaría la comparación.
@@ -722,36 +731,40 @@ e invalidaría la comparación.
 \subsection{CPU vs GPU por tamaño de cuadrícula}
 \label{sec:res-cpu-gpu}
 
-La Figura~\ref{fig:cpuvsgpu} compara, en ejes log--log, los tres caminos según el
+La Figura~\ref{fig:cpuvsgpu} compara, en ejes log--log, los cuatro caminos según el
 tamaño de grilla. La CPU secuencial es prácticamente \textbf{plana} en $\approx
 27$~Mcélulas/s: como se anticipó en la Sección~\ref{sec:cota-cpu}, está limitada por
-cómputo, no por memoria. La CPU paralela se estabiliza en $\approx 150$--$160$, y la
-GPU domina por \textbf{dos a tres órdenes de magnitud}, con su máximo ($\approx
-32$~Gcélulas/s) en $N=2048$; más allá decae levemente (efecto de reloj/SOL: el
-perfilamiento muestra que la tasa de acierto de L2 se mantiene en $\approx88\%$ y la
-DRAM al $\approx20\%$ también en $N=8192$). La curva \texttt{CUDA (wall)} incluye el costo de
-lanzamiento por paso: se separa del \texttt{kernel} en grillas pequeñas (la GPU queda
-infrautilizada) y se le junta para $N \gtrsim 2048$.
+cómputo, no por memoria. La CPU paralela se estabiliza en $\approx 150$~Mcélulas/s, y
+ambas GPU dominan por \textbf{dos a tres órdenes de magnitud}. \textbf{CUDA y OpenCL
+son prácticamente indistinguibles} ---sus curvas de \emph{kernel} se superponen---,
+con el máximo ($\approx 35$--$37$~Gcélulas/s) en $N=2048$; más allá decae levemente
+(efecto de reloj/SOL: el perfilamiento muestra que la tasa de acierto de L2 se
+mantiene en $\approx88\%$ y la DRAM al $\approx20\%$ también en $N=8192$). Las curvas
+\texttt{(wall)} incluyen el costo de lanzamiento por paso: se separan del
+\texttt{kernel} en grillas pequeñas (la GPU queda infrautilizada) y se le juntan para
+$N \gtrsim 2048$.
 
 \insertimage{bench_cpu_vs_gpu}{width=0.86\linewidth}{Rendimiento (Mcélulas/s, ejes
-log--log) según el tamaño de grilla $N$, mejor de las repeticiones. \label{fig:cpuvsgpu}}
+log--log) según el tamaño de grilla $N$, mejor de las repeticiones, para CPU
+(secuencial y paralela), CUDA y OpenCL. \label{fig:cpuvsgpu}}
 
 \begin{table}[H]
 	\centering
 	\caption{Rendimiento por backend y \emph{speed-up} de la GPU frente a la mejor CPU
-	paralela (mejor de las repeticiones). En $N{=}16384$ la CPU secuencial se omitió
-	por costo (su rendimiento es plano, $\approx 26$~Mcélulas/s).}
+	paralela ($S$, mejor de las repeticiones). En $N{=}16384$ la CPU secuencial se
+	omitió por costo (su rendimiento es plano, $\approx 26$~Mcélulas/s).}
 	\label{tab:cpugpu}
-	\begin{tabular}{@{}rrrrr@{}}
+	\begin{tabular}{@{}rrrrrrr@{}}
 		\toprule
-		$N$ & CPU sec. [Mcél/s] & CPU par. [Mcél/s] & CUDA [Gcél/s] & $S$ (vs par.) \\
+		$N$ & CPU sec. & CPU par. & CUDA & OpenCL & $S_{\text{CUDA}}$ & $S_{\text{OpenCL}}$ \\
+		    & [Mcél/s] & [Mcél/s] & [Gcél/s] & [Gcél/s] & (vs par.) & (vs par.) \\
 		\midrule
-		256   & 29  & 160 & 12{,}3 & 77  \\
-		1024  & 28  & 160 & 29{,}2 & 183 \\
-		2048  & 27  & 159 & 32{,}1 & 202 \\
-		4096  & 27  & 149 & 30{,}1 & 202 \\
-		8192  & 26  & 154 & 25{,}9 & 168 \\
-		16384 & --- & 159 & 24{,}8 & 157 \\
+		256   & 29  & 156 & 12{,}1 & 13{,}2 & 78  & 85  \\
+		1024  & 28  & 156 & 28{,}4 & 32{,}1 & 182 & 206 \\
+		2048  & 27  & 143 & 34{,}7 & 35{,}6 & 242 & 249 \\
+		4096  & 25  & 143 & 28{,}8 & 33{,}8 & 202 & 237 \\
+		8192  & 26  & 145 & 25{,}9 & 25{,}3 & 178 & 174 \\
+		16384 & --- & 152 & 24{,}8 & 25{,}9 & 164 & 171 \\
 		\bottomrule
 	\end{tabular}
 \end{table}
@@ -774,34 +787,40 @@ ideal. \label{fig:cputhreads}}
 \subsection{Resultados de las opciones elegidas}
 \label{sec:res-opciones}
 
-La Figura~\ref{fig:blockshared} reúne las dos optimizaciones. La curva por
-\textbf{tamaño de bloque} es cóncava: con 32 hilos hay muy pocos \emph{warps} por SM
-para ocultar la latencia de memoria, y con 512 la ocupación cae; el óptimo está en
-\textbf{64--128} hilos. La \textbf{memoria compartida} (líneas discontinuas) queda
-\emph{sistemáticamente por debajo} de la versión global ---en torno a $0{,}55\times$
-su rendimiento--- confirmando la predicción del modelo (Sección~\ref{sec:cota-gpu}):
-para un \emph{stencil} de 1 byte la caché L2 ya sirve la reutilización, y la barrera,
-el halo y los accesos byte-a-byte a la SRAM cuestan más de lo que ahorran. La
-Tabla~\ref{tab:opt} resume el mejor bloque por $N$.
+La Figura~\ref{fig:blockshared} reúne las dos optimizaciones para ambos motores GPU
+(CUDA a la izquierda, OpenCL a la derecha). La curva por \textbf{tamaño de bloque} (o
+\emph{work-group}) es cóncava en los dos: con 32 hilos hay muy pocos \emph{warps} por
+SM para ocultar la latencia de memoria, y con 512 la ocupación cae; el óptimo está en
+\textbf{64--128}. La \textbf{memoria local/compartida} (líneas discontinuas) queda
+\emph{sistemáticamente por debajo} de la versión global ---en torno a la mitad de su
+rendimiento, una penalización de $\approx 1{,}8$--$2{,}1\times$--- confirmando la
+predicción del modelo (Sección~\ref{sec:cota-gpu}): para un \emph{stencil} de 1 byte
+la caché L2 ya sirve la reutilización, y la barrera, el halo y los accesos
+byte-a-byte a la SRAM cuestan más de lo que ahorran. \textbf{OpenCL reproduce el
+patrón de CUDA} ---mismo backend en NVIDIA--- con un pico de $\approx 37$~Gcélulas/s
+frente a $\approx 35$ de CUDA. La Tabla~\ref{tab:opt} resume el mejor bloque por $N$.
 
-\insertimage{bench_block_shared}{width=0.86\linewidth}{CUDA: rendimiento (Gcélulas/s)
-por tamaño de bloque, memoria global (sólido) frente a compartida (discontinuo), para
-varias grillas. \label{fig:blockshared}}
+\insertimage{bench_block_shared}{width=\linewidth}{Rendimiento (Gcélulas/s) por
+tamaño de bloque/\emph{work-group}, memoria global (sólido) frente a local/compartida
+(discontinuo), para varias grillas; CUDA (izquierda) y OpenCL (derecha).
+\label{fig:blockshared}}
 
 \begin{table}[H]
 	\centering
-	\caption{Mejor configuración global frente a compartida (Gcélulas/s; el mejor
-	tamaño de bloque se indica entre paréntesis).}
+	\caption{Mejor configuración: memoria global frente a local/compartida
+	(Gcélulas/s, mejor tamaño de bloque por $N$), para CUDA y OpenCL.}
 	\label{tab:opt}
-	\begin{tabular}{@{}rccc@{}}
+	\begin{tabular}{@{}rcccc@{}}
 		\toprule
-		$N$ & global (mejor blq.) & compartida (mejor blq.) & global/compartida \\
+		    & \multicolumn{2}{c}{CUDA [Gcél/s]} & \multicolumn{2}{c}{OpenCL [Gcél/s]} \\
+		\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+		$N$ & global & local & global & local \\
 		\midrule
-		1024  & 31{,}7 (64/128) & 17{,}9 (128) & 1{,}77 \\
-		2048  & 34{,}9 (128)    & 18{,}9 (128) & 1{,}85 \\
-		4096  & 29{,}8 (128)    & 15{,}2 (256) & 1{,}96 \\
-		8192  & 26{,}2 (64)     & 13{,}6 (128) & 1{,}93 \\
-		16384 & 24{,}8 (128)    & 13{,}5 (128) & 1{,}84 \\
+		1024  & 31{,}6 & 17{,}9 & 32{,}6 & 18{,}2 \\
+		2048  & 32{,}7 & 17{,}1 & 36{,}2 & 19{,}1 \\
+		4096  & 35{,}2 & 17{,}1 & 37{,}2 & 19{,}3 \\
+		8192  & 26{,}7 & 14{,}1 & 27{,}5 & 13{,}2 \\
+		16384 & 25{,}7 & 13{,}9 & 25{,}3 & 14{,}2 \\
 		\bottomrule
 	\end{tabular}
 \end{table}
@@ -813,27 +832,31 @@ varias grillas. \label{fig:blockshared}}
 \label{sec:speedup}
 
 El \emph{speed-up} (Ecuación~\ref{eq:speedup}, panel izquierdo de la
-Figura~\ref{fig:speedup}) alcanza $\approx 1200\times$ frente a la versión secuencial
-y $\approx 200\times$ frente a la mejor CPU paralela, con su máximo en
-$N=2048$--$4096$. Conviene leer ambos números junto con la cota de la
-Sección~\ref{sec:cota-speedup}: el cociente ``limpio'' de anchos de banda predice
-$\approx 6{,}8\times$, y el $\sim 200\times$ medido es mucho mayor porque la CPU base
-no está en su techo de memoria (opera a $\sim 1/150$ de él), no porque el hardware de
-la GPU sea $200\times$ superior. El $\sim 200\times$ mezcla, entonces, la ventaja real
-de ancho de banda de la GPU con la inmadurez de la CPU escalar de referencia.
+Figura~\ref{fig:speedup}) alcanza $\approx 1300\times$ frente a la versión secuencial
+y $\approx 240$--$250\times$ frente a la mejor CPU paralela (OpenCL marginalmente por
+encima de CUDA), con su máximo en $N=2048$. Conviene leer ambos números junto con la
+cota de la Sección~\ref{sec:cota-speedup}: el cociente ``limpio'' de anchos de banda
+predice $\approx 6{,}8\times$, y el $\sim 250\times$ medido es mucho mayor porque la
+CPU base no está en su techo de memoria (opera a $\sim 1/150$ de él), no porque el
+hardware de la GPU sea $250\times$ superior. El $\sim 250\times$ mezcla, entonces, la
+ventaja real de ancho de banda de la GPU con la inmadurez de la CPU escalar de
+referencia.
 
-\insertimage{bench_speedup}{width=\linewidth}{Izquierda: \emph{speed-up} de la GPU
-frente a la CPU secuencial y a la mejor paralela. Derecha: eficiencia
-\texttt{wall/kernel} (peso del \emph{overhead} de lanzamiento); la banda señala la
-rodilla $N\approx 1024$--$2048$. \label{fig:speedup}}
+\insertimage{bench_speedup}{width=\linewidth}{Izquierda: \emph{speed-up} de CUDA y
+OpenCL frente a la CPU secuencial y a la mejor paralela. Derecha: eficiencia
+\texttt{wall/kernel} (peso del \emph{overhead} de lanzamiento) de ambos motores; la
+banda señala la rodilla $N\approx 1024$--$2048$. \label{fig:speedup}}
 
 \subsection{Umbral de conveniencia GPU}
 \label{sec:umbral}
 
 El panel derecho de la Figura~\ref{fig:speedup} muestra la eficiencia
 \texttt{wall/kernel}, que mide el peso del \emph{overhead} de lanzamiento por paso:
-sube de $\approx 40\%$ en $N=64$ a $\approx 98\%$ en $N \gtrsim 2048$, de modo que la
-\textbf{rodilla} de conveniencia está en $N \approx 1024$--$2048$. Por debajo, la GPU
+en CUDA sube de $\approx 38\%$ en $N=64$ a $\approx 99\%$ en $N \gtrsim 2048$ (en
+OpenCL arranca más abajo, $\approx 26\%$, porque su \emph{kernel} más rápido hace que
+el costo fijo de lanzamiento pese más en términos relativos, y converge al mismo
+$\approx 99\%$), de modo que la \textbf{rodilla} de conveniencia está en $N \approx
+1024$--$2048$. Por debajo, la GPU
 está infrautilizada (pocos bloques para llenar los 24 SM) y el lanzamiento domina; por
 encima, el kernel satura el bus.
 
@@ -912,39 +935,44 @@ Tabla~\ref{tab:ncu} resume las métricas del kernel global y del de memoria comp
 	\end{tabular}
 \end{table}
 
-El perfilamiento de OpenCL con \texttt{std::chrono} queda pendiente junto con ese
-backend.
+Nsight Compute solo perfila CUDA, no OpenCL; pero como en NVIDIA OpenCL baja por el
+mismo backend PTX/SASS y rinde casi igual (Sección~\ref{sec:res-opciones}), el mismo
+análisis \emph{roofline} aplica. El rendimiento de OpenCL se cronometra en programa
+con eventos de la cola de comandos, igual de fiable que los eventos de CUDA.
 
 \section{Conclusiones}
 \label{sec:conclusiones}
 
-Se implementaron y compararon tres caminos del Juego de la Vida con la regla variante
-\texttt{B36/S23}: CPU secuencial, CPU paralela y CUDA (OpenCL queda pendiente). Los
+Se implementaron y compararon cuatro caminos del Juego de la Vida con la regla
+variante \texttt{B36/S23}: CPU secuencial, CPU paralela, CUDA y OpenCL. Los
 hallazgos principales:
 
 \begin{itemize}
-	\item \textbf{Memoria compartida contraproducente.} Para un \emph{stencil} de 1
-	      byte, la versión con memoria compartida rinde $\approx 0{,}55\times$ la
-	      global: la caché L2 ya captura la reutilización y la barrera/halo no se
+	\item \textbf{Memoria local/compartida contraproducente.} Para un \emph{stencil}
+	      de 1 byte, la versión con memoria local rinde $\approx 0{,}5\times$ la global
+	      (penalización $\approx 1{,}8$--$2{,}1\times$), \textbf{tanto en CUDA como en
+	      OpenCL}: la caché L2 ya captura la reutilización y la barrera/halo no se
 	      amortizan. Esto valida el análisis \emph{roofline}.
-	\item \textbf{Tamaño de bloque.} Óptimo en 64--128 hilos, con curva cóncava por
+	\item \textbf{Tamaño de bloque.} Óptimo en 64--128, con curva cóncava por
 	      ocupación.
 	\item \textbf{CPU.} Escala hasta los 6 núcleos físicos ($\approx 5{,}4\times$); el
 	      \emph{hyperthreading} aporta poco y, por la sincronización con barrera,
 	      desbalancea en 8 y 10 hilos.
-	\item \textbf{GPU.} $\approx 32$~Gcélulas/s. El perfilamiento revela que \emph{no}
-	      la limita el ancho de banda de DRAM (al $\approx20\%$, pues la L2 sirve el
-	      $88\%$ de las solicitudes) sino la tubería L2/LSU y la latencia ($\sim$65\%
-	      de SOL); hay margen de mejora con más paralelismo de instrucción.
-	\item \textbf{Speed-up.} Hasta $\approx 200\times$ sobre la mejor CPU paralela y
-	      $\approx 1200\times$ sobre la secuencial; la cota ``limpia'' de hardware es
-	      $\approx 6{,}8\times$, y la diferencia se explica por una CPU base no
-	      vectorizada.
+	\item \textbf{GPU.} $\approx 35$~Gcélulas/s en CUDA y $\approx 37$ en OpenCL: en
+	      NVIDIA \textbf{OpenCL iguala a CUDA} porque baja por el mismo backend
+	      PTX/SASS. El perfilamiento revela que \emph{no} la limita el ancho de banda
+	      de DRAM (al $\approx20\%$, pues la L2 sirve el $88\%$ de las solicitudes)
+	      sino la tubería L2/LSU y la latencia ($\sim$65\% de SOL); hay margen de
+	      mejora con más paralelismo de instrucción.
+	\item \textbf{Speed-up.} Hasta $\approx 240$--$250\times$ sobre la mejor CPU
+	      paralela y $\approx 1300\times$ sobre la secuencial; la cota ``limpia'' de
+	      hardware es $\approx 6{,}8\times$, y la diferencia se explica por una CPU base
+	      no vectorizada.
 \end{itemize}
 
-\textbf{Limitaciones y trabajo futuro.} Falta el backend OpenCL y el perfilamiento con
-Nsight (Sección~\ref{sec:profiling}); la disposición de 1 byte por celda fija el techo
-de la GPU (empaquetar bits lo elevaría) y la CPU se beneficiaría de una reescritura
+\textbf{Limitaciones y trabajo futuro.} Nsight Compute no perfila OpenCL
+(Sección~\ref{sec:profiling}); la disposición de 1 byte por celda fija el techo de la
+GPU (empaquetar bits lo elevaría) y la CPU se beneficiaría de una reescritura
 vectorizada (AVX2) sin saltos.
 
 % FIN DEL DOCUMENTO

@@ -57,10 +57,15 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   `--engine opencl --verify` and a `gol_opencl_tests` gtest (see Tests). Opt-in via `-DBUILD_OPENCL=ON`; on an
   NVIDIA box the platform is "NVIDIA CUDA", so it lowers through the same PTX/SASS backend as CUDA.
 
-- **Benchmarks** — run. `scripts/sweep.sh` drives the CPU(threads) + CUDA(block×shared) sweeps to
-  `results/sweep_*.csv`; `analysis/results.ipynb` (Spanish) plots them to `report/img/bench_*.png`.
-  Headline: CUDA peaks ~32 Gcells/s, ~200× over the best parallel CPU; **shared memory is slower**
-  (~0.55×) and block 64–128 is optimal. `ncu` corrected the roofline: the kernel is **not** DRAM-bound —
+- **Benchmarks** — run. `scripts/sweep.sh` drives the CPU(threads) + CUDA + OpenCL (block×shared/local)
+  sweeps; on the Linux box they go to `results/linux/sweep_{gpu_opt,scaling}.csv`, and
+  `analysis/results.ipynb` (Spanish, reads `results/linux/`) plots them to `report/img/bench_*.png`.
+  Headline: on Linux both GPU backends peak together — **CUDA ~35 Gcells/s, OpenCL ~37** (on NVIDIA
+  OpenCL lowers through the same PTX/SASS backend, so it matches CUDA), ~240–250× over the best parallel
+  CPU; **shared/local memory is slower** (~0.5×, a ~1.8–2.1× penalty on *both* engines) and block 64–128
+  is optimal. (A Windows baseline committed on `prefinal`, `results/sweep_*.csv` with a BOM, shows OpenCL
+  anomalously ~20× slow — an unhealthy Windows ICD path, not representative; the Linux data is the real
+  story.) `ncu` corrected the roofline: the kernel is **not** DRAM-bound —
   L2 serves ~88% of requests so DRAM sees ~2 B/cell at ~20% util; it's latency/L2-pipe-bound (~65% SOL).
   `nsys`: ~30 µs/step launch overhead, H2D 8.4 GB/s (pageable `std::vector`). Report Resultados/Análisis,
   §Cotas, and §Perfilamiento are filled from this (`results/profiling/*.ncu-rep`).
@@ -154,9 +159,9 @@ src/render/    TextRenderer.cpp AnsiRenderer.cpp           (NullRenderer is head
 src/patterns/  Pattern.cpp RleLoader.cpp
 tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp cuda_equivalence_test.cpp opencl_equivalence_test.cpp
 patterns/      *.rle                                       (block, blinker, birth_on_six, highlife_replicator, highlife_spaceship)
-scripts/       sweep.sh                                    (CPU+CUDA benchmark sweeps -> results/*.csv)
-results/       sweep_cuda_opt.csv sweep_scaling.csv         (Pandas-ready sweep data)
-analysis/      results.ipynb                               (loads results/, writes report/img/bench_*.png)
+scripts/       sweep.sh sweep_gpu_opt.ps1 sweep_scaling.ps1 (CPU+CUDA+OpenCL sweeps; .ps1 are the Windows variants)
+results/       sweep_gpu_opt.csv sweep_scaling.csv          (Windows baseline, BOM); linux/ holds the Linux re-run
+analysis/      results.ipynb                               (loads results/linux/, writes report/img/bench_*.png)
 ```
 
 Per the report plan (`report/main.tex`), the two kernel-config variations to benchmark are block sizes
