@@ -1,0 +1,336 @@
+% Template:     Informe LaTeX
+% Documento:    Engineering report - Static load balancing for a CPU+GPU stencil
+% Codificación: UTF-8
+%
+% Standalone engineering report on the HybridEngine (CPU+GPU, Divisible Load
+% Theory, Barlas 11.3) sweep results. Build like the other two documents:
+%   cd report && latexmk -pdf hybrid_report.tex
+% Replaces the earlier Markdown note hybrid_load_balancing_analysis.md.
+
+% CREACIÓN DEL DOCUMENTO
+\documentclass[
+	english,
+	letterpaper, oneside
+]{article}
+
+% INFORMACIÓN DEL DOCUMENTO
+\def\documenttitle {Static Load Balancing for a CPU\,+\,GPU Stencil}
+\def\documentsubtitle {Hybrid CPU+GPU load balancing: results and a verdict}
+\def\documentsubject {Computación en GPU}
+
+\def\documentauthor {Matías Saavedra}
+\def\coursename {Computación en GPU}
+\def\coursecode {CC7515-1}
+
+\def\universityname {Universidad de Chile}
+\def\universityfaculty {Facultad de Ciencias Físicas y Matemáticas}
+\def\universitydepartment {Departamento de Ciencias de la Computación}
+\def\universitydepartmentimage {departamentos/dcc}
+\def\universitydepartmentimagecfg {height=1.57cm}
+\def\universitylocation {Santiago de Chile}
+
+% INTEGRANTES, PROFESORES Y FECHAS
+\def\authortable {
+	\begin{tabular}{ll}
+		Author:
+		& \begin{tabular}[t]{l}
+			Matías Saavedra
+		\end{tabular} \\
+		& \\
+		\multicolumn{2}{l}{Document: engineering report (hybrid load balancing)} \\
+		\multicolumn{2}{l}{Last updated: \today} \\
+		\multicolumn{2}{l}{\universitylocation}
+	\end{tabular}
+}
+
+% IMPORTACIÓN DEL TEMPLATE
+\input{template}
+
+% INICIO DE PÁGINAS
+\begin{document}
+
+% PORTADA
+\templatePortrait
+
+% CONFIGURACIÓN DE PÁGINA Y ENCABEZADOS
+\templatePagecfg
+
+% RESUMEN O ABSTRACT
+\begin{abstractd}
+	The \texttt{HybridEngine} runs the CPU and the GPU together on one Game of
+	Life board (HighLife, \texttt{B36/S23}), split by rows with Divisible Load
+	Theory (DLT, Barlas \S11.3). This report analyses a full benchmark sweep on a
+	GTX~1660~Ti Max-Q paired with a 12-thread CPU. The hybrid is correct and the
+	DLT split lands exactly where the theory predicts ($\sim$99.4\,\% GPU /
+	0.6\,\% CPU), but the GPU is $\sim$160$\times$ the CPU, so the load-balancing
+	ceiling is a $\sim$0.6\,\% speed-up --- smaller than the per-step coordination
+	cost. The hybrid therefore does not beat pure GPU here. A raw reading of the
+	sweep looks like it does at large $N$; that turned out to be a confound --- the
+	hybrid runs a faster, branch-free GPU kernel than the standalone CUDA engine.
+	Controlling for the kernel, load balancing is a net loss at small/mid $N$ and
+	break-even at large $N$. The real performance lever the exercise surfaced is the
+	halo kernel, not the balancing. We also document an OpenCL driver regression seen
+	during the run.
+\end{abstractd}
+
+% TABLA DE CONTENIDOS - ÍNDICE
+\templateIndex
+
+% CONFIGURACIONES FINALES
+\templateFinalcfg
+
+% ======================= INICIO DEL DOCUMENTO =======================
+
+\section{Scope and setup}
+\label{sec:setup}
+
+Backend under test: the \texttt{HybridEngine} (branch
+\texttt{static\_load\_balancing}) --- CPU\,+\,GPU on one board, split by rows, the
+partition chosen by DLT. Hardware: an NVIDIA GTX~1660~Ti Max-Q (\texttt{sm\_75},
+60\,W power ceiling) and a 12-thread CPU, on Linux. Data:
+\texttt{results/linux/sweep\_\{gpu\_opt,scaling\}.csv} from \texttt{scripts/sweep.sh};
+figure \texttt{img/hybrid\_load\_balancing.png}.
+
+\begin{itemize}
+	\item Metric. Cells evaluated per second,
+	$\text{Mcells/s} = (\text{rows}\times\text{cols}\times\text{gens}) / (t\times10^{6})$,
+	measured with the \texttt{NullRenderer} so host\,$\leftrightarrow$\,device
+	transfers and drawing never enter the timed loop. Timing is in-program and
+	uniform per backend (CPU and hybrid: \texttt{std::chrono}; CUDA:
+	\texttt{cudaEvent}). The hybrid figure is the wall of the concurrent CPU+GPU
+	region, i.e.\ $\approx$ the slower of the two nodes.
+	\item Sweep. Experiment A is the GPU block\,$\times$\,shared/local sweep;
+	experiment B is the scaling vs.\ $N$ for CPU(threads) / CUDA / OpenCL / hybrid.
+	We report the best (highest-Mcells) row per configuration, matching ``mejor
+	tiempo'' in the graded report. Bounded edges, deterministic random fill
+	(\texttt{--seed 1}: identical work across backends).
+	\item Controlled follow-ups (this analysis). Single-knob runs that isolate why
+	the hybrid behaves as it does: pure CUDA vs.\ the halo kernel on the full board
+	(\texttt{--cpu-frac 0}) vs.\ the auto-split hybrid, all at block 128 so the only
+	variable is the code path.
+\end{itemize}
+
+GPU health was verified before and after the sweep (idle 4.9\,W, 39--41\,\textdegree
+C, 60\,W ceiling, no power-cap creep, no throttle flags), so the GPU numbers are not
+thermally compromised. Run-to-run boost-clock variance is real, though --- see
+\S\ref{sec:variance}.
+
+\section{Throughput results}
+\label{sec:throughput}
+
+\begin{table}[H]
+	\centering
+	\caption{Best throughput per backend per grid size $N$ (Gcells/s, kernel time).
+	The last column, ``GPU halo-only'', is the hybrid's GPU path run with
+	\texttt{--cpu-frac 0} (halo kernel, full board, no CPU) --- a control that
+	isolates the kernel from the load balancing.}
+	\label{tab:throughput}
+	\begin{tabular}{@{}rrrrrr@{}}
+		\toprule
+		$N$ & CPU (best $t$) & CUDA & OpenCL & Hybrid (auto) & GPU halo-only \\
+		\midrule
+		512   & 0.151 & 24.76 & 1.67 & 5.20  & 14.57 \\
+		1024  & 0.146 & 27.55 & 1.70 & 9.56  & 25.07 \\
+		2048  & 0.144 & 31.52 & 1.70 & 19.91 & 30.70 \\
+		4096  & 0.142 & 32.25 & 1.69 & 22.75 & 31.42 \\
+		8192  & 0.147 & 26.20 & 1.69 & 25.12 & 28.79 \\
+		16384 & 0.152 & 24.83 & 1.68 & 28.46 & 28.72 \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+The headlines from the table:
+
+\begin{itemize}
+	\item The CPU plateaus at $\sim$0.15\,Gcells/s regardless of $N$: a 1-byte
+	9-point stencil is memory-bandwidth bound, and beyond $\sim$6 threads the cores
+	contend for the same bandwidth (scaling is flat, not linear). This sets
+	$R_\mathrm{cpu}$.
+	\item CUDA is $\sim$160--230$\times$ the CPU, peaking $\sim$32\,Gcells/s at
+	$N\approx2048$--$4096$, then easing to $\sim$25 at $N=16384$ (larger working sets
+	spill L2, so the kernel becomes more memory-bound).
+	\item OpenCL came out anomalous (see \S\ref{sec:opencl}). At 1.7\,Gcells/s it is
+	$\sim$15$\times$ below CUDA, which is not representative of this hardware, and is
+	excluded from the conclusions.
+\end{itemize}
+
+\section{The load-balancing split (DLT \S11.3)}
+\label{sec:split}
+
+The calibration phase times a few CPU-only and GPU-only steps on the actual grid
+and applies the all-finish-together optimum:
+
+\begin{equation}
+	\label{eq:dlt}
+	\text{part}_\mathrm{gpu} = \frac{R_\mathrm{gpu}}{R_\mathrm{cpu} + R_\mathrm{gpu}},
+	\qquad
+	\text{part}_\mathrm{cpu} = 1 - \text{part}_\mathrm{gpu},
+\end{equation}
+
+\noindent with $R = 1/p$ the measured throughput (cells/s), converted to a row split
+$s = \text{round}(\text{part}_\mathrm{cpu}\cdot R)$.
+
+\begin{table}[H]
+	\centering
+	\caption{Calibrated rates and the resulting split. $R$ in Mcells/s. The split is
+	stable at 0.6\,\% CPU at every size, exactly as $R_\mathrm{cpu}/R_\mathrm{gpu}
+	\approx 0.006$ predicts.}
+	\label{tab:split}
+	\begin{tabular}{@{}rrrrrrr@{}}
+		\toprule
+		$N$ & $R_\mathrm{cpu}$ & $R_\mathrm{gpu}$ & GPU/CPU & CPU rows & CPU share & DLT bound $R_\mathrm{cpu}{+}R_\mathrm{gpu}$ \\
+		\midrule
+		2048  & 157.6 & 24\,504 & 156$\times$ & 13 & 0.6\,\% & 24\,661 \\
+		4096  & 163.8 & 27\,176 & 166$\times$ & 25 & 0.6\,\% & 27\,340 \\
+		8192  & 158.5 & 25\,271 & 159$\times$ & 51 & 0.6\,\% & 25\,430 \\
+		16384 & 158.0 & 27\,286 & 173$\times$ & 94 & 0.6\,\% & 27\,444 \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+The split matches the \S11.3 optimum to the row, and the two nodes finish together:
+at $N=16384$ the CPU needs $94 \times 16384 / 158$\,Mcells/s $\approx 9.74$\,ms and
+the GPU needs $16\,290 \times 16384 / 27\,286$\,Mcells/s $\approx 9.78$\,ms. The DLT
+machinery works precisely as the book describes --- this is not a tuning failure.
+
+The catch is the ceiling. Because the CPU's optimal share is only 0.6\,\%, the DLT
+``equivalent node'' throughput $R_\mathrm{cpu}+R_\mathrm{gpu}$ is at most 0.6\,\%
+above the GPU alone. That is the entire prize, and it is tiny.
+
+\section{The figure}
+\label{sec:figure}
+
+\insertimage{hybrid_load_balancing}{width=\linewidth}{Hybrid scaling. Left (log--log,
+all backends): the GPU backends sit $\sim$160--230$\times$ above the flat CPU line;
+the anomalous OpenCL curve hugs $\sim$1.7\,Gcells/s. Right (GPU band): CUDA
+(\texttt{life\_global}) peaks early then sags; the halo kernel holds
+$\sim$29\,Gcells/s at large $N$; the auto-split hybrid climbs from far below toward
+the GPU band as the per-step overhead amortizes, only catching up near $N=16384$.}
+
+\section{Unexpected findings}
+\label{sec:findings}
+
+\subsection{``Hybrid beats CUDA at large N'' is a kernel effect, not load balancing}
+\label{sec:confound}
+
+The raw sweep shows the hybrid mean exceeding the CUDA mean at $N=16384$ (27.4 vs.\
+24.6\,Gcells/s, $+11$\,\%) with low variance --- too consistent to be noise, yet
+impossible to attribute to the CPU, whose DLT-optimal contribution is only 0.6\,\%. A
+controlled run resolves it (block 128, full board):
+
+\begin{table}[H]
+	\centering
+	\caption{Like-for-like at block 128, mean of repeated runs (Gcells/s). The halo
+	kernel beats \texttt{life\_global} with zero CPU; adding the CPU and the
+	coordination (hybrid auto) gives it all back.}
+	\label{tab:kernel}
+	\begin{tabular}{@{}rrrr@{}}
+		\toprule
+		$N$ & CUDA \texttt{life\_global} & Halo kernel (\texttt{--cpu-frac 0}, no CPU) & Hybrid (auto) \\
+		\midrule
+		4096  & 25.68 & 26.61 ($+3.6$\,\%) & 18.25 ($-29$\,\%) \\
+		16384 & 25.14 & 28.12 ($+12$\,\%)  & 25.39 ($+1$\,\%) \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+The halo kernel is intrinsically faster than \texttt{life\_global}, with zero CPU
+involvement. The reason: \texttt{life\_global} does a per-cell vertical bounds check
+(\texttt{if (nr < 0 || nr >= rows)}, or a modulo under \texttt{--wrap}) for every
+neighbour row; the halo kernel reads its vertical neighbours unconditionally from
+always-present ghost rows, so it is branch-free in the vertical direction. At large
+$N$ the kernel is compute/branch-bound (not launch-bound), so removing those branches
+buys 10--16\,\%. The ``hybrid beats CUDA'' headline was the hybrid's GPU slice quietly
+running a better kernel --- a confound, not a balancing win.
+
+\subsection{Once the kernel is held constant, load balancing is a net loss}
+\label{sec:netloss}
+
+Comparing like-for-like (both on the halo kernel), hybrid-auto is below halo-only at
+every size --- $-29$\,\% at $N=4096$, $\approx$ break-even at $N=16384$. The per-step
+coordination (ghost-row exchange $+$ waking the worker pool $+$ synchronising the two
+nodes, $\sim$0.3--1\,ms/step) costs more than the 0.6\,\% the CPU offloads. Concretely
+at $N=16384$: the DLT-optimal split saves the GPU $\sim$0.6\,\% of its time
+($\sim$0.06\,ms) by handing 94 rows to the CPU, while the coordination adds
+$\sim$0.6--1\,ms --- a clear net loss that only looks like break-even because the halo
+kernel's own speed-up cancels it.
+
+\subsection{OpenCL regressed to the pathological ICD path (environment, not code)}
+\label{sec:opencl}
+
+This Linux box previously measured OpenCL at $\sim$37\,Gcells/s, on par with CUDA
+(both lower through the same PTX/SASS on NVIDIA). This run measured 1.70\,Gcells/s ---
+reproducible on a single clean \texttt{--engine opencl} run, $\sim$14.7$\times$ below
+CUDA. The \texttt{--engine opencl} code is unchanged on this branch, the GPU is
+healthy for CUDA, and the slowdown is OpenCL-specific, so this is the driver/ICD
+pathology previously seen for Windows, now affecting this Linux session. The action
+item: the OpenCL rows in this sweep are not representative; reboot and re-run before
+regenerating any committed OpenCL figures or trusting the OpenCL column. The hybrid
+sweep used \texttt{--gpu-backend cuda}, so it is unaffected.
+
+\subsection{GPU run-to-run variance is $\sim$10--25\,\%}
+\label{sec:variance}
+
+A single CUDA run at $N=4096$ gave 24.9\,Gcells/s vs.\ the best-of-5 of 31.8 ---
+boost-clock and scheduling variance, largest at small $N$ (per-rep CV up to $\sim$30\,\%
+at $N=2048$, down to $\sim$1--5\,\% at $N=16384$). Any margin smaller than this band ---
+including the entire 0.6\,\% load-balancing prize --- is unmeasurable. Report best-of-$N$
+and treat sub-10\,\% differences at small grids as noise.
+
+\subsection{OpenCL work-group limit at block 512}
+\label{sec:wg512}
+
+\texttt{--block 512} fails OpenCL with \texttt{CL\_INVALID\_WORK\_GROUP\_SIZE} (code
+$-54$) on this device (CUDA runs 512 fine). The sweep skips it gracefully; it is a
+device limit, not a regression. Block 64--128 is optimal on both engines anyway.
+
+\section{Conclusion: does static load balancing pay off here?}
+\label{sec:conclusion}
+
+The implementation is correct and the theory is vindicated, but the regime is wrong
+for a win.
+
+\begin{itemize}
+	\item Correctness. The hybrid verifies bit-for-bit against the \texttt{CpuEngine}
+	oracle in both edge modes and across all splits; the calibrated partition matches
+	the \S11.3 optimum to the row; the two nodes finish together. As a teaching
+	realization of DLT on a genuinely heterogeneous CPU+GPU pair (disjoint memory,
+	real seam communication), it does exactly what the book says.
+	\item But this is the textbook ``one node dominates'' regime. With the GPU
+	$\sim$160$\times$ the CPU, the DLT-optimal CPU share is 0.6\,\%, so the
+	theoretical ceiling over pure GPU is $\sim$0.6\,\% --- and the per-step ghost
+	exchange $+$ pool wakeup $+$ sync exceed that. The hybrid ranges from $-29$\,\%
+	(small/mid $N$, overhead dominated) to break-even (large $N$, overhead
+	amortized). It never meaningfully beats pure GPU.
+	\item The only speed-up in the data is a kernel-engineering side effect. The
+	ghost-cell halo kernel, built to make domain decomposition possible, is
+	incidentally 10--16\,\% faster than the original global kernel at large $N$
+	because it trades vertical boundary branches for unconditional ghost-row reads.
+\end{itemize}
+
+\subsection*{Recommendations}
+
+\begin{enumerate}
+	\item Ship pure GPU with the halo (branch-free) kernel. That is the real lever
+	this exercise surfaced --- a free 10--16\,\% at large $N$, no CPU, no
+	coordination. Consider promoting the halo formulation to the default global
+	kernel (it needs only a one-row zero-pad at the board's top/bottom under bounded
+	edges).
+	\item Keep the hybrid as a correct DLT reference, not a production path on this
+	hardware. It becomes a win only when $R_\mathrm{cpu}$ and $R_\mathrm{gpu}$ are
+	within a small factor (say $<5\times$): a vectorized / bit-sliced CPU kernel
+	(raising $R_\mathrm{cpu}$ by 1--2 orders of magnitude), a weaker / shared GPU, or
+	an integrated GPU\,+\,CPU. There the offloaded share is large enough to dwarf the
+	fixed coordination cost.
+	\item Re-run OpenCL after a reboot before regenerating committed OpenCL figures;
+	the current 1.7\,Gcells/s is a transient ICD pathology, not this hardware's OpenCL
+	performance.
+\end{enumerate}
+
+The bottom line: static load balancing is the right tool for balanced heterogeneous
+nodes, and the implementation proves it can be done correctly and cheaply. On a
+GTX~1660~Ti paired with a scalar CPU stencil it has nothing to balance --- the honest
+result is ``$\approx$ pure GPU'', and the interesting performance story is the kernel,
+not the split.
+
+\end{document}
