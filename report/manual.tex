@@ -61,9 +61,9 @@
 	a CUDA backend and an OpenCL backend --- built to benchmark
 	cells-evaluated-per-second and report the GPU speed-up over the CPU. It
 	explains the architecture from first principles, states the single
-	invariant that shapes every design decision (\emph{the three backends
+	invariant that shapes every design decision (the three backends
 	must compute byte-for-byte identical boards so that any difference in
-	speed is the real result}), and then walks the source code function by
+	speed is the real result), and then walks the source code function by
 	function, with the C\texttt{++} files explained line by line. All three
 	backends are complete: the CPU backend is the correctness oracle, and the
 	CUDA and OpenCL backends are each verified bit-for-bit against it. The
@@ -71,9 +71,9 @@
 	$\text{Mcells/s} = (\text{rows}\times\text{cols}\times\text{gens}) /
 	(t \times 10^{6})$, measured against a no-op renderer so that rendering
 	and host\,$\leftrightarrow$\,device transfers never pollute the number.
-	A final section documents the real-time \textbf{Qt\,+\,OpenGL viewer}
+	A final section documents the real-time Qt\,+\,OpenGL viewer
 	(\texttt{gol\_gui}) built on top of the same engines, which displays the
-	GPU-computed board through \textbf{CUDA\,$\leftrightarrow$\,OpenGL interop}
+	GPU-computed board through CUDA\,$\leftrightarrow$\,OpenGL interop
 	(zero host round trip), with a host-upload fallback that also lets it run on
 	the CPU engine with no CUDA toolkit present.
 \end{abstractd}
@@ -91,15 +91,15 @@
 
 This is the engineering manual for the codebase, not the graded report. The
 graded report lives in \texttt{main.tex} and presents experiments and results;
-this manual explains \emph{how the code works and why it is built the way it
-is}. Read it top to bottom the first time: the early sections establish the one
+this manual explains how the code works and why it is built the way it
+is. Read it top to bottom the first time: the early sections establish the one
 constraint that everything else follows from, and the later sections assume you
 already understand it.
 
 The manual blends two styles. It is structured like an engineering report
 (setup, mechanism, tables, explicit trade-offs) but written like a deep code
-explanation (every non-obvious decision is traced to \emph{why it exists} and
-\emph{what would break if it were different}). For the C\texttt{++} translation
+explanation (every non-obvious decision is traced to why it exists and
+what would break if it were different). For the C\texttt{++} translation
 units it descends to a line-by-line account; for the headers, which are mostly
 declarations, it summarises and shows the parts that carry real logic.
 
@@ -114,9 +114,9 @@ cd report && latexmk -pdf manual.tex
 \section{The problem, and the invariant it forces}
 \label{sec:problem}
 
-The assignment looks like a simulation task but is really a \emph{measurement}
+The assignment looks like a simulation task but is really a measurement
 task. The deliverable is a number and an explanation of that number: how many
-cells per second each backend evaluates, and \emph{why} the GPU wins (or loses)
+cells per second each backend evaluates, and why the GPU wins (or loses)
 at a given grid size. Conway's Game of Life --- here the HighLife variant
 \texttt{B36/S23} --- is only the workload. It is deliberately a good workload
 for the question being asked: a nine-point stencil over one-byte cells is
@@ -127,29 +127,29 @@ for a GPU report.
 Every architectural decision in the codebase serves one goal:
 
 \begin{quote}
-	\emph{Run the identical computation on three backends and trust that any
+	Run the identical computation on three backends and trust that any
 	difference in output is a bug, so that any difference in speed is the real
-	result.}
+	result.
 \end{quote}
 
 Two hard requirements fall out of that sentence, and they explain the entire
 design:
 
 \begin{enumerate}
-	\item \textbf{Bit-for-bit equivalence across backends.} If CPU and GPU
+	\item Bit-for-bit equivalence across backends. If CPU and GPU
 	      produce different boards, the cells/sec comparison is meaningless.
-	      This forces a \emph{shared} cell layout, a \emph{shared} rule, and
-	      \emph{shared} edge handling.
-	\item \textbf{Measurement that is not polluted by I/O.} The headline metric
+	      This forces a shared cell layout, a shared rule, and
+	      shared edge handling.
+	\item Measurement that is not polluted by I/O. The headline metric
 	      is compute throughput, so rendering and host\,$\leftrightarrow$\,device
 	      transfers must be removable from the timed path.
 \end{enumerate}
 
 The rule variant is the one detail most likely to be implemented inconsistently,
-so it is worth stating precisely. It is \emph{not} vanilla Conway:
+so it is worth stating precisely. It is not vanilla Conway:
 
 \begin{itemize}
-	\item a dead cell is born on \textbf{exactly 3 OR exactly 6} live neighbours;
+	\item a dead cell is born on exactly 3 OR exactly 6 live neighbours;
 	\item a live cell survives on 2 or 3 live neighbours;
 	\item everything else dies or stays dead.
 \end{itemize}
@@ -161,7 +161,7 @@ CUDA and OpenCL, which is why it is written exactly once (Section
 \section{Architecture at a glance}
 \label{sec:arch}
 
-The codebase is a \textbf{strategy pattern}: a backend-agnostic core plus two
+The codebase is a strategy pattern: a backend-agnostic core plus two
 swappable interfaces. The only thing that genuinely differs between backends ---
 the per-generation compute --- sits behind \texttt{ISimEngine}; output sits
 behind \texttt{IRenderer}; the application owns the loop and wires one of each at
@@ -177,11 +177,11 @@ Application (main.cpp)  -- owns the loop + Config/CLI
 \end{sourcecode}
 
 The real-time Qt\,+\,OpenGL viewer (\texttt{gol\_gui}) reuses the same
-\texttt{ISimEngine} backends but is a \emph{separate} front-end rather than an
+\texttt{ISimEngine} backends but is a separate front-end rather than an
 \texttt{IRenderer} --- Qt owns its event loop and the display path avoids the host
 \texttt{Grid} entirely. It is documented on its own in Section~\ref{sec:gui}.
 
-The dependency arrows point \emph{from} engines \emph{to} the core, never back ---
+The dependency arrows point from engines to the core, never back ---
 that one-directional dependency is what keeps the core backend-agnostic and lets a
 single host-side harness drive all three engines. The link graph is:
 
@@ -226,7 +226,7 @@ and impose no link dependency.
 	\label{tab:files}
 	\begin{tabular}{@{}lll@{}}
 		\toprule
-		\textbf{File} & \textbf{Responsibility} & \textbf{\S} \\
+		File & Responsibility & \S \\
 		\midrule
 		\texttt{include/gol/Grid.hpp}            & Board state; the shared layout (HO) & \ref{sec:grid} \\
 		\texttt{include/gol/LifeRules.hpp}        & The variant rule, written once (HO) & \ref{sec:liferules} \\
@@ -288,7 +288,7 @@ that makes the backends interchangeable.
 \label{sec:grid}
 
 \texttt{Grid} is the single most important object in the project. It is a
-\textbf{flat, row-major \texttt{std::vector<unsigned char>}} where cell $(x,y)$
+flat, row-major \texttt{std::vector<unsigned char>} where cell $(x,y)$
 lives at index $y\cdot\text{cols}+x$, with $0=$ dead, $1=$ alive.
 
 \begin{sourcecode}{cpp}{include/gol/Grid.hpp --- the load-bearing parts.}
@@ -324,21 +324,21 @@ private:
 equivalence requirement:
 
 \begin{itemize}
-	\item \textbf{Flat and contiguous}, because a GPU device buffer is a flat
+	\item Flat and contiguous, because a GPU device buffer is a flat
 	      array. A flat \texttt{unsigned char} buffer maps to \texttt{cudaMemcpy}
-	      / \texttt{clEnqueueWriteBuffer} with \emph{zero} translation --- the
+	      / \texttt{clEnqueueWriteBuffer} with zero translation --- the
 	      same bytes on host and device. A \texttt{vector<vector<>>} would need a
 	      transform on every transfer, and the transform itself could introduce
 	      divergence.
-	\item \textbf{One byte per cell, not one bit.} Bit-packing would be
+	\item One byte per cell, not one bit. Bit-packing would be
 	      $8\times$ smaller and use less bandwidth, but it would turn the
 	      neighbour read into a bit-extraction and make the three backends harder
 	      to keep identical. The project accepts the $8\times$ memory cost to keep
-	      the stencil a plain array read. This is also \emph{why} shared memory
-	      \emph{hurts} rather than helps on the GPU (Section \ref{sec:timing}): the
+	      the stencil a plain array read. This is also why shared memory
+	      hurts rather than helps on the GPU (Section \ref{sec:timing}): the
 	      one-byte stencil's reuse is already served by L2, so explicit staging only adds a
 		barrier and loses L1 reuse.
-	\item \textbf{\texttt{at(x,y)} is unchecked.} The simulation hot path
+	\item \texttt{at(x,y)} is unchecked. The simulation hot path
 	      evaluates this billions of times; a bounds branch per access would be a
 	      measurable tax on a memory-bound kernel. Bounds are the caller's
 	      responsibility.
@@ -347,7 +347,7 @@ equivalence requirement:
 \paragraph{The invariant.} \texttt{Grid} owns no device memory and contains no
 device code. It is pure host state. Engines own their own ping-pong buffers and
 touch the \texttt{Grid} only through \texttt{data()} during
-\texttt{upload()}/\texttt{download()}. \textbf{What would break otherwise:} if the
+\texttt{upload()}/\texttt{download()}. What would break otherwise: if the
 \texttt{Grid} held device pointers, the host harness and the equivalence test
 could no longer drive all three engines through one type.
 
@@ -355,7 +355,7 @@ Two methods exist purely for equivalence. \texttt{randomize} uses a seeded
 \texttt{std::mt19937\_64}, so ``same seed $\Rightarrow$ same starting board''
 holds across backends --- without a deterministic seed you could not start CPU
 and GPU from an identical state. \texttt{operator==} compares dimensions
-\emph{and} the full byte vector; this is literally the oracle check the
+and the full byte vector; this is literally the oracle check the
 cross-backend test will call.
 
 \subsection{\texttt{LifeRules} --- the rule written once, compiled three times}
@@ -386,15 +386,15 @@ GOL_FN unsigned char nextState(unsigned char alive, int neighbors) {
 
 \paragraph{The mechanism.} When the host C\texttt{++} compiler reads this file,
 \texttt{nextState} is an ordinary \texttt{inline} function used by
-\texttt{CpuEngine}. When \texttt{nvcc} reads the \emph{same} file it defines
+\texttt{CpuEngine}. When \texttt{nvcc} reads the same file it defines
 \texttt{\_\_CUDACC\_\_}, so the macro expands to \texttt{\_\_host\_\_
 \_\_device\_\_} and the CUDA kernel calls the byte-for-byte identical logic. CPU
-and CUDA therefore \emph{cannot} diverge on the rule --- they share source.
+and CUDA therefore cannot diverge on the rule --- they share source.
 
 \paragraph{The acknowledged exception.} OpenCL C cannot \texttt{\#include} a
 C\texttt{++} header, so this function is mirrored in \texttt{kernel.cl}
 (read at runtime, kept diff-able against this header). The project deliberately
-does \emph{not} chase zero duplication between CUDA and OpenCL: two duplicated
+does not chase zero duplication between CUDA and OpenCL: two duplicated
 copies that are easy to eyeball-diff beat one clever abstraction that is hard to
 follow. That is a stated trade-off, not an oversight.
 
@@ -435,7 +435,7 @@ public:
 };
 \end{sourcecode}
 
-The crucial part is the documented \textbf{ping-pong contract}: an engine keeps
+The crucial part is the documented ping-pong contract: an engine keeps
 two equally-sized buffers; \texttt{step()} reads the ``current'' buffer, writes
 the ``next'' buffer, then swaps them. This guarantees \texttt{step()} advances
 exactly one generation and never aliases its input and output.
@@ -443,7 +443,7 @@ exactly one generation and never aliases its input and output.
 \paragraph{Why the two-buffer rule is non-negotiable.} A stencil reads each
 cell's neighbours. If \texttt{step()} wrote new values into the same buffer it is
 still reading from, cells processed later in the sweep would see
-\emph{next-generation} neighbours instead of \emph{current-generation} ones, and
+next-generation neighbours instead of current-generation ones, and
 the result would silently depend on traversal order. The two-buffer invariant
 prevents that, and it is stated in the interface so every backend obeys it. GPU
 engines do the swap on the device; only \texttt{upload}/\texttt{download} cross
@@ -462,9 +462,9 @@ public:
 \texttt{shouldClose()} defaults to \texttt{false}; the interactive
 \texttt{AnsiRenderer} (Section \ref{sec:ansi}) overrides it so a keypress
 (\texttt{q}) can break the loop early. (The Qt viewer also breaks early on quit,
-but it is a \emph{separate} front-end, not an \texttt{IRenderer} ---
+but it is a separate front-end, not an \texttt{IRenderer} ---
 Section~\ref{sec:gui}.) The key implementation is \texttt{NullRenderer}
-(Section \ref{sec:render}), whose entire purpose is to \emph{not exist} in the
+(Section \ref{sec:render}), whose entire purpose is to not exist in the
 timed path.
 
 \subsection{\texttt{Config} --- the run configuration}
@@ -491,7 +491,7 @@ Config parse(int argc, char** argv);
 
 The GPU-only knobs (\texttt{blockSize}, \texttt{useShared}) live here and are
 simply ignored by \texttt{CpuEngine}. That is deliberate: one \texttt{Config}
-type, and a single binary whose flag surface is the \emph{union} over all
+type, and a single binary whose flag surface is the union over all
 backends, can script the entire benchmark matrix (block sizes
 $\{32,64,128,256\}$ $\times$ shared/no-shared) without recompilation.
 
@@ -524,8 +524,8 @@ in \texttt{std::exit}), which lets call sites fall through after calling it
 without the compiler complaining about a missing return value.
 
 \texttt{nextValue} is the mechanism that makes the parse loop correct. It takes
-the loop index \texttt{i} \textbf{by reference}; line 36 checks a token follows
-the flag, and line 40 \emph{pre-increments} \texttt{i} --- this both returns the
+the loop index \texttt{i} by reference; line 36 checks a token follows
+the flag, and line 40 pre-increments \texttt{i} --- this both returns the
 value token and advances the caller's index past it, so the main \texttt{for}
 loop does not re-examine a flag's argument as if it were another flag. Remove the
 \texttt{\&} on \texttt{i} and the parser would try to interpret every value as a
@@ -608,7 +608,7 @@ void seed(Grid& grid, const Config& cfg) {
 The factory's \texttt{default} falling to \texttt{NullRenderer} is a safety
 choice: any unexpected enum value degrades to the benchmark-safe no-op renderer
 rather than crashing. In \texttt{seed}, the ternaries on the origins are
-\emph{not} cosmetic: \texttt{cols}, \texttt{width} are unsigned, so if the
+not cosmetic: \texttt{cols}, \texttt{width} are unsigned, so if the
 pattern were wider than the grid, \texttt{cfg.cols - p.width} would underflow to
 a gigantic value and \texttt{applyTo} would clip the whole pattern off-grid. The
 guard makes the origin $0$ in that case so at least the top-left lands.
@@ -648,7 +648,7 @@ auto mcellsPerSec = [cells](double ms) {
 \paragraph{The measurement invariant, in code.} The \texttt{rendering} bool
 (set to \texttt{cfg.renderer != RendererKind::Null}) gates the entire
 \texttt{download} + \texttt{render} block. Under \texttt{NullRenderer} the loop
-body is \emph{only} \texttt{step()} plus the time accumulation: no transfers, no
+body is only \texttt{step()} plus the time accumulation: no transfers, no
 formatting. That is why the rule ``always benchmark against \texttt{NullRenderer}''
 holds --- it is structurally enforced, not a convention you have to remember.
 
@@ -658,7 +658,7 @@ the whole loop. Reporting both separately lets the report distinguish ``the
 kernel got faster'' from ``we are transfer-bound''.
 
 \paragraph{Two subtleties.} The seed is generation $0$ and is rendered
-\emph{before} the first \texttt{step()} so frame labels are honest (this is the
+before the first \texttt{step()} so frame labels are honest (this is the
 fix in commit \texttt{0f87fd9}); the \texttt{(double)} casts on the
 \texttt{cells} product avoid 32-bit overflow at large grids (e.g.
 $4096^2\times1000\approx 6.9\times10^{10}$ overflows 32-bit but is exact in
@@ -677,10 +677,10 @@ CPU-only build prints the rebuild hint and exits 1 rather than crashing.
 
 This is the most subtle file in the project, and the most important: it is the
 correctness oracle for every future backend, and it implements the sequential
-baseline and the data-parallel version \emph{in one code path}. The reason one
-path can serve both is that the Game of Life step has \textbf{no
-intra-generation data dependencies}: every cell reads only the current buffer and
-writes only the next, so parallelising is \emph{purely} a matter of splitting the
+baseline and the data-parallel version in one code path. The reason one
+path can serve both is that the Game of Life step has no
+intra-generation data dependencies: every cell reads only the current buffer and
+writes only the next, so parallelising is purely a matter of splitting the
 rows across threads. The per-cell math is identical; only the row range differs.
 
 \subsection{Data model and invariants}
@@ -706,9 +706,9 @@ class CpuEngine final : public ISimEngine {
 	\item \texttt{cur\_} / \texttt{nxt\_}: the two ping-pong buffers. Invariant:
 	      at the start of every \texttt{step()}, \texttt{cur\_} holds the current
 	      generation; at the end, after a swap, it holds the new one.
-	\item \texttt{workers\_}: a \emph{persistent} thread pool, created only when
+	\item \texttt{workers\_}: a persistent thread pool, created only when
 	      \texttt{threads\_ >= 2}. Persistent so per-generation thread
-	      \emph{creation} never enters the timed region.
+	      creation never enters the timed region.
 	\item \texttt{barrier\_}: a \texttt{std::barrier} with exactly
 	      \texttt{threads\_} participants (main thread + \texttt{threads\_-1}
 	      workers).
@@ -753,9 +753,9 @@ The destructor is the trickiest correctness point in the file. At rest, every
 worker is parked at the phase-1 barrier inside \texttt{workerLoop}. To shut down:
 set \texttt{stop\_} (relaxed ordering suffices --- the barrier provides the
 happens-before edge that publishes the flag), then \texttt{arrive\_and\_wait()}
-\emph{once}. That single arrival completes phase 1 and releases every worker,
-which then sees \texttt{stop\_} and \textbf{returns without arriving at the
-phase-2 barrier}. That asymmetry is essential: if the workers hit phase 2 on
+once. That single arrival completes phase 1 and releases every worker,
+which then sees \texttt{stop\_} and returns without arriving at the
+phase-2 barrier. That asymmetry is essential: if the workers hit phase 2 on
 shutdown, the main thread (which is not waiting on phase 2 here) would leave them
 blocked and \texttt{join()} would deadlock.
 
@@ -781,21 +781,21 @@ void CpuEngine::workerLoop(unsigned id) {
 }
 \end{sourcecode}
 
-Worker ids run $1\ldots\text{threads\_}-1$; \textbf{id 0 is the main thread}. The
+Worker ids run $1\ldots\text{threads\_}-1$; id 0 is the main thread. The
 main thread doing real work (partition 0) rather than just coordinating is a
 deliberate efficiency choice: with $N$ cores you get $N$ workers, not $N-1$ plus
 an idle coordinator.
 
-The worker is a two-phase handshake. \textbf{Phase 1} (``go'') blocks until
+The worker is a two-phase handshake. Phase 1 (``go'') blocks until
 \texttt{step()} or the destructor arrives. After release the worker checks
 \texttt{stop\_} --- the only way the loop ever ends. Otherwise it computes its row
-slice and signals \textbf{phase 2} (``done''), then loops back to park at phase 1.
+slice and signals phase 2 (``done''), then loops back to park at phase 1.
 The two distinct barriers per cycle separate ``all threads have started this
 generation'' from ``all threads have finished it''.
 
 \paragraph{Why the lock-free pointer publish is safe.} \texttt{step()} writes
-\texttt{src\_}/\texttt{dst\_} \emph{before} arriving at phase 1; the worker reads
-them \emph{after} leaving phase 1. The barrier establishes a happens-before
+\texttt{src\_}/\texttt{dst\_} before arriving at phase 1; the worker reads
+them after leaving phase 1. The barrier establishes a happens-before
 relationship, so the writes are visible without any lock or atomic on the
 pointers themselves.
 
@@ -875,17 +875,17 @@ void CpuEngine::computeRows(const unsigned char* src, unsigned char* dst,
 }
 \end{sourcecode}
 
-Cells are $0/1$, so \emph{summing} neighbour values \emph{is} counting the live
+Cells are $0/1$, so summing neighbour values is counting the live
 ones --- no comparison needed. In the toroidal branch the \texttt{+ size} before
 \texttt{\%} is necessary because C\texttt{++}'s \texttt{\%} on a negative operand
 yields a negative result; adding the size first guarantees a non-negative
 dividend, so $-1 \bmod \text{cols}$ becomes $\text{cols}-1$ (wrap to the far
 edge). In the bounded branch, out-of-range neighbours are simply skipped, i.e.
-counted as dead --- this is the \textbf{default} edge mode. Both modes must match
+counted as dead --- this is the default edge mode. Both modes must match
 every backend bit-for-bit, which is why both are tested.
 
 \texttt{computeRows} is the single implementation of the stencil, called by
-\emph{both} the sequential path (full range) and every worker (its slice). One
+both the sequential path (full range) and every worker (its slice). One
 implementation of the math is the source of the sequential/parallel equivalence.
 Hoisting \texttt{row = y*cols\_} out of the inner loop saves a multiply per cell.
 
@@ -923,9 +923,9 @@ sizes \texttt{nxt\_} (its initial contents do not matter --- \texttt{step}
 overwrites every cell).
 
 \texttt{step} is timed by the chrono \texttt{Timer}; this is the CPU's
-\texttt{lastKernelMillis()} source. In the \textbf{sequential} branch it is one
+\texttt{lastKernelMillis()} source. In the sequential branch it is one
 \texttt{computeRows} over $[0,\text{rows\_})$ with zero synchronisation. In the
-\textbf{parallel} branch the main thread mirrors the worker handshake from its
+parallel branch the main thread mirrors the worker handshake from its
 own side: publish the buffer pointers, phase-1 arrival releases the workers, the
 main thread computes partition 0 itself instead of idling, and phase-2 arrival
 blocks until every worker has finished. The symmetry is the point: \texttt{step}
@@ -1001,7 +1001,7 @@ read consecutive 1-byte cells of a row, so global loads coalesce --- the right
 default for a memory-bound stencil. \texttt{lifeGlobal} reads the eight
 neighbours straight from global memory. \texttt{lifeShared} (selected by
 \texttt{--shared}) first stages a \texttt{(bx+2) x (by+2)} tile plus a one-cell
-halo into shared memory cooperatively, applying the \emph{same} edge rule during
+halo into shared memory cooperatively, applying the same edge rule during
 the halo load (bounded $\rightarrow$ 0, toroidal $\rightarrow$ wrap), then reads
 neighbours from the tile. Both produce byte-identical results to the CPU oracle;
 the report's job is to measure whether the staging pays off (Section
@@ -1016,18 +1016,18 @@ keeping them separate makes the index arithmetic obvious
 (Figure~\ref{fig:cuda-spaces}):
 
 \begin{itemize}
-	\item \textbf{Execution space} --- how the \emph{threads} are organised: the
+	\item Execution space --- how the threads are organised: the
 	\texttt{dim3 grid}/\texttt{block} the launcher picks, addressed by the 2-D
 	\texttt{blockIdx} and \texttt{threadIdx}. This says nothing about memory; it is
 	only how work is handed out.
-	\item \textbf{Board space} --- the \texttt{rows} $\times$ \texttt{cols} logical
+	\item Board space --- the \texttt{rows} $\times$ \texttt{cols} logical
 	Game-of-Life grid, addressed by \texttt{(row, col)}. This is where ``above'',
 	``below'', ``left'' and ``right'' mean something.
-	\item \textbf{Memory space} --- the flat, row-major 1-D \texttt{Grid} array,
+	\item Memory space --- the flat, row-major 1-D \texttt{Grid} array,
 	addressed by a single \texttt{offset}.
 \end{itemize}
 
-The \texttt{Grid} is \emph{always} 1-D; the 2-D thread indexing exists only to
+The \texttt{Grid} is always 1-D; the 2-D thread indexing exists only to
 assign one thread per cell and to make neighbour arithmetic cheap. Two maps
 connect the spaces, and each is a single line of kernel code. The launcher's
 thread indices become board coordinates (\texttt{kernel.cu:30--31}):
@@ -1046,21 +1046,21 @@ space) only for convenience; the board is the 2-D logical grid; storage is a fla
 
 \paragraph{A block is a rectangle on the board, not a run in memory.} The block
 shape \texttt{32}\,$\times$\,\texttt{by} is \texttt{32}\,$\times$\,\texttt{by}
-adjacent cells \emph{in board space} --- a small rectangle --- which is
-\emph{not} \texttt{32}\,$\times$\,\texttt{by} adjacent cells in memory. Each of
+adjacent cells in board space --- a small rectangle --- which is
+not \texttt{32}\,$\times$\,\texttt{by} adjacent cells in memory. Each of
 the \texttt{by} rows of the block is a run of 32 contiguous bytes, and
 consecutive rows sit \texttt{cols} apart, because that is what ``the row below''
 means in row-major storage. Figure~\ref{fig:cuda-blockmap} makes this concrete on
 a scaled-down \texttt{8}\,$\times$\,\texttt{6} board with a
 \texttt{4}\,$\times$\,\texttt{2} block: the block's eight cells are two contiguous
-4-runs separated by a \texttt{cols - bx} gap. A \emph{warp} --- the 32 threads
+4-runs separated by a \texttt{cols - bx} gap. A warp --- the 32 threads
 (here drawn as 4) sharing one \texttt{threadIdx.y} --- is exactly one such
 contiguous run, which is why those loads coalesce into a single memory
 transaction and why \texttt{bx} is pinned to 32. The cell directly ``below'' a
 thread is \texttt{+cols} away in memory, never \texttt{+bx}.
 
 \insertimage{cuda_block_mapping}{width=\linewidth}{One block maps to a rectangle
-on the board (top) but to two \emph{discontiguous} runs in memory (bottom),
+on the board (top) but to two discontiguous runs in memory (bottom),
 \texttt{cols - bx} apart. Scaled down (\texttt{cols=8},
 \texttt{4}$\times$\texttt{2} block, ``warp''~=~4) to fit; real code uses a 32-wide
 warp. Cell numbers are the 1-D offset \texttt{row*cols + col}. Each warp (fixed
@@ -1134,24 +1134,24 @@ than the GPU's $\sim$25--30\% run-to-run boost-clock variance (Section
 \section{The hybrid engine --- \texttt{HybridEngine.cpp} and the halo partitions}
 \label{sec:hybrid}
 
-\texttt{HybridEngine} runs the \emph{CPU and a GPU on the same board at the same
-time}, splitting the work by rows. It is an \texttt{ISimEngine} like any other
+\texttt{HybridEngine} runs the CPU and a GPU on the same board at the same
+time, splitting the work by rows. It is an \texttt{ISimEngine} like any other
 backend, but internally it is two engines glued at a seam, with the split chosen
-by \textbf{static load balancing} following the divisible-load-theory (DLT)
-approach of Barlas, \emph{Multicore and GPU Programming} (2e), \S11.3.
+by static load balancing following the divisible-load-theory (DLT)
+approach of Barlas, Multicore and GPU Programming (2e), \S11.3.
 
 \subsection{Why row-wise, and why ghosts}
 The Game of Life step is a 9-point stencil: a cell's next state depends on its
 eight neighbours. If we cut the board into a top block for the CPU (rows
 $[0,s)$) and a bottom block for the GPU (rows $[s,R)$), the two blocks are
-\emph{almost} independent --- they interact only across the cut, where each side
+almost independent --- they interact only across the cut, where each side
 needs one row of the other's current state to update its boundary row. This is
 exactly the ``extra rows of pixels'' that \S11.3 attaches to the image-convolution
-example, and it is what makes the load \emph{divisible}: the per-generation
+example, and it is what makes the load divisible: the per-generation
 communication is a single row each way, independent of how many rows each side
 owns.
 
-We give each block a one-row \textbf{ghost} (halo) above and below its real rows,
+We give each block a one-row ghost (halo) above and below its real rows,
 so a block that owns \texttt{realRows} rows holds a buffer of height
 \texttt{realRows + 2}:
 
@@ -1162,7 +1162,7 @@ so a block that owns \texttt{realRows} rows holds a buffer of height
 \end{sourcecode}
 
 \noindent The CPU keeps its block in host buffers; the GPU keeps its block in
-device buffers. Each side ping-pongs \emph{locally} across generations, and the
+device buffers. Each side ping-pongs locally across generations, and the
 full board is reassembled only on \texttt{download()}. So the bulk slice never
 crosses the PCIe bus during the run --- only the ghost rows do.
 
@@ -1172,23 +1172,23 @@ vertical and horizontal edge rules into one \texttt{wrap} flag, which is wrong f
 a sub-block: at the seam the ``edge'' is not a board boundary but the neighbour's
 data. The hybrid therefore uses a dedicated kernel --- \texttt{lifeHalo} in
 \texttt{kernel.cu}, \texttt{life\_halo} in \texttt{kernel.cl} --- that
-\textbf{reads vertical neighbours straight from the ghost rows} (no vertical edge
-logic at all) and applies only the \emph{horizontal} (column) edge rule. The host
+reads vertical neighbours straight from the ghost rows (no vertical edge
+logic at all) and applies only the horizontal (column) edge rule. The host
 fills the ghosts to realise whichever board edge mode is in force:
 
 \begin{itemize}
-  \item \textbf{Seam} (always): the CPU's last real row $\to$ the GPU's top ghost,
+  \item Seam (always): the CPU's last real row $\to$ the GPU's top ghost,
         and the GPU's first real row $\to$ the CPU's bottom ghost.
-  \item \textbf{Far edges, bounded:} the outermost ghosts stay zero (dead). Both
+  \item Far edges, bounded: the outermost ghosts stay zero (dead). Both
         device/host buffers are zeroed once at upload and the kernel never writes
         ghost rows, so this costs nothing per step.
-  \item \textbf{Far edges, toroidal} (\texttt{--wrap}): the board's top wraps to
+  \item Far edges, toroidal (\texttt{--wrap}): the board's top wraps to
         its bottom, so the CPU's first row and the GPU's last row are exchanged
         into the opposite far ghosts (a host bounce of one row each).
 \end{itemize}
 
-\noindent Because the only difference between the two edge modes is \emph{which
-rows the host copies into the ghosts}, one kernel serves both, and the result is
+\noindent Because the only difference between the two edge modes is which
+rows the host copies into the ghosts, one kernel serves both, and the result is
 bit-for-bit identical to the \texttt{CpuEngine} oracle in each. The CPU half uses
 the same idea in plain C\texttt{++}: \texttt{computeCpuRows} reads its vertical
 neighbours from the buffer (ghosts included) and handles columns per \texttt{wrap},
@@ -1199,7 +1199,7 @@ DLT models each node's time as affine in its share. Ignoring the (tiny) per-step
 communication, node $i$ that owns a fraction $\text{part}_i$ of the $L$ cells
 finishes in $t_i \approx \text{part}_i\,L / R_i$, where $R_i$ is its throughput in
 cells/s. The optimum --- the one \S11.3 proves minimises the makespan --- is the
-partition where \emph{all nodes finish together}; for two nodes that gives
+partition where all nodes finish together; for two nodes that gives
 
 \[
   \text{part}_{\text{gpu}} = \frac{R_{\text{gpu}}}{R_{\text{cpu}}+R_{\text{gpu}}},
@@ -1212,11 +1212,11 @@ The throughputs come from one of two places, both ``static'' in the sense that t
 split is decided once and then frozen for the whole run:
 
 \begin{itemize}
-  \item \textbf{\texttt{--cpu-frac F}} sets $\text{part}_{\text{cpu}}=F$ directly ---
+  \item \texttt{--cpu-frac F} sets $\text{part}_{\text{cpu}}=F$ directly ---
         an offline cost-model value the user supplies (and what the equivalence
         test sweeps, including the degenerate $F{=}0$ pure-GPU and $F{=}1$
         pure-CPU ends).
-  \item \textbf{Calibration (default)} is the a-priori ``initialization phase'' of
+  \item Calibration (default) is the a-priori ``initialization phase'' of
         the two-phase scheme in \S11.3: in \texttt{upload()} the engine times
         \texttt{--calib-steps} CPU-only and GPU-only steps on the actual grid,
         derives $R_{\text{cpu}}$ and $R_{\text{gpu}}$, and computes the split. The
@@ -1240,7 +1240,7 @@ swap(cpuCur, cpuNxt);    // swap the CPU buffers
 \noindent The CPU half reuses \texttt{CpuEngine}'s persistent \texttt{std::barrier}
 worker pool verbatim (Section \ref{sec:cpu}), so thread-creation never enters the
 loop. \texttt{lastKernelMillis()} reports the wall time of this concurrent region,
-i.e.\ roughly the \emph{maximum} of the two nodes' times --- which is what the
+i.e.\ roughly the maximum of the two nodes' times --- which is what the
 optimum equalises. For OpenCL, \texttt{launchStep} issues a \texttt{clFlush} after
 enqueuing so the in-order queue actually starts the kernel on the device while the
 host computes, rather than deferring it to the \texttt{finishStep} wait.
@@ -1257,7 +1257,7 @@ created through opaque factory functions, so the only thing crossing into
 \texttt{HybridEngine.cpp} is a \texttt{std::unique\_ptr<IHaloPartition>}.
 \texttt{--gpu-backend} picks between them at runtime; \texttt{gol\_hybrid} is built
 whenever at least one GPU backend is configured. The hybrid uses the
-\emph{global-memory} halo kernel only --- the shared/local-memory option is studied
+global-memory halo kernel only --- the shared/local-memory option is studied
 on the pure GPU engines (Section \ref{sec:cuda}) and is not applied here.
 
 \subsection{What the split tells you}
@@ -1267,7 +1267,7 @@ the CPU's throughput, so calibration picks $\text{part}_{\text{gpu}}\approx99.5\
 and the CPU is left with a handful of rows. There the hybrid's per-step
 coordination (the ghost exchange and waking the worker pool for a tiny share) can
 cost more than the sliver of work the CPU absorbs, so the hybrid lands at
-\emph{about} the pure-GPU rate rather than beating it --- the regime \S11.3
+about the pure-GPU rate rather than beating it --- the regime \S11.3
 describes when a node is too slow to be worth a share. The mechanism is general,
 though: the closer the two throughputs, the more the hybrid wins, up to the DLT
 ceiling $R_{\text{cpu}}+R_{\text{gpu}}$.
@@ -1275,7 +1275,7 @@ ceiling $R_{\text{cpu}}+R_{\text{gpu}}$.
 \section{The pattern pipeline --- \texttt{RleLoader.cpp} and \texttt{Pattern.cpp}}
 \label{sec:patterns}
 
-A \texttt{Pattern} is a \emph{sparse} seed: a bounding box plus the list of live
+A \texttt{Pattern} is a sparse seed: a bounding box plus the list of live
 \texttt{(x,y)} offsets. Sparse because that is the natural output of RLE decoding
 and it decouples a pattern from any particular grid size.
 
@@ -1326,11 +1326,11 @@ o    -> (0,2)                  x=1
 \end{sourcecode}
 
 That leaves a dead centre $(1,1)$ surrounded by exactly six live neighbours ---
-which under the variant rule must be \emph{born}. This fixture is the payload
+which under the variant rule must be born. This fixture is the payload
 behind the ``birth on 6'' correctness test (Section \ref{sec:tests}).
 
 Two robustness details round out the loader: the header parser
-(\texttt{x = 3, y = 3, rule = B36/S23}) \emph{ignores} the \texttt{rule=} field
+(\texttt{x = 3, y = 3, rule = B36/S23}) ignores the \texttt{rule=} field
 --- the simulation rule lives in code, not data, so a stray fixture cannot
 silently change the simulation --- and if the header omits dimensions, the loader
 infers the bounding box from $\max(x)+1$, $\max(y)+1$ over the decoded cells.
@@ -1359,7 +1359,7 @@ crash.
 There are three renderers behind \texttt{IRenderer}, none of which is in the
 benchmark path (the loop only renders when the renderer is not Null).
 \texttt{NullRenderer::render} is an empty inline body --- header-only because
-there is nothing to define. Its entire purpose is to \emph{not} exist in the
+there is nothing to define. Its entire purpose is to not exist in the
 timed path (Section \ref{sec:main}).
 
 \begin{sourcecode}{cpp}{src/render/TextRenderer.cpp --- one buffer, one write.}
@@ -1384,7 +1384,7 @@ with a single \texttt{fputs}. Per-cell \texttt{putchar} would lock and flush the
 stream thousands of times per frame. \texttt{at(x, y)} keeps the
 \texttt{(column, row)} argument order matching \texttt{Grid}'s convention even
 though storage is row-major. A terminal character cell is about twice as tall as
-it is wide, so to make cells read as squares a live cell defaults to \emph{two}
+it is wide, so to make cells read as squares a live cell defaults to two
 full blocks (U+2588) and a dead cell to two spaces; the glyph fields are
 \texttt{std::string} (not \texttt{char}) to hold the multi-byte, two-column cell,
 and \texttt{alive\_} / \texttt{dead\_} share a display width so the grid stays
@@ -1394,7 +1394,7 @@ benchmark.
 \subsection{\texttt{AnsiRenderer} --- in-place animation, clipped to the viewport}
 \label{sec:ansi}
 
-\texttt{TextRenderer} \emph{appends} each frame, so the terminal scrolls and any
+\texttt{TextRenderer} appends each frame, so the terminal scrolls and any
 row wider than the terminal soft-wraps; it is a dump, not an animation.
 \texttt{AnsiRenderer} instead homes the cursor and overwrites the same region
 every frame using ANSI/DEC control sequences, producing a stable in-place
@@ -1438,7 +1438,7 @@ would occupy several terminal rows and desynchronise the cursor-home arithmetic
 that the whole in-place scheme depends on. So it disables autowrap
 (\texttt{\textbackslash 033[?7l}) and renders only the top-left
 $\min(\text{rows},\,\text{term}-1)\times\min(\text{cols},\,\text{term}/\text{cell})$
-window, where \emph{cell} is the per-cell display width ($2$ for the default
+window, where cell is the per-cell display width ($2$ for the default
 two-block glyph); it annotates the header, e.g. \texttt{generation 0 view(0,0)
 40x23 of 300x300} ($300$ columns in an $80$-column terminal leaves room for $40$
 two-column cells). The size is re-queried every frame, so resizing the terminal
@@ -1453,18 +1453,18 @@ of the view per press, clamped to the grid), \texttt{space}/\texttt{p} toggles
 pause, and \texttt{q} sets the flag returned by \texttt{shouldClose()} so the main
 loop stops. Reads are non-blocking, so input never stalls the simulation.
 
-\emph{Pause is contained entirely in the renderer}: while paused,
+Pause is contained entirely in the renderer: while paused,
 \texttt{render()} loops on a \texttt{do/while} --- still polling input and
-redrawing the \emph{same} generation (the header shows \texttt{[PAUSED]}) --- and
+redrawing the same generation (the header shows \texttt{[PAUSED]}) --- and
 returns only once unpaused or quitting, so the application never calls
 \texttt{step()} meanwhile. The main loop, the engine, and the \texttt{IRenderer}
 interface are untouched, and the benchmark path (NullRenderer) never pauses. The
-terminal is restored on destruction \emph{and} from a
+terminal is restored on destruction and from a
 \texttt{SIGINT}/\texttt{SIGTERM} handler (so Ctrl-C cannot leave it in raw mode);
 when stdin is not a TTY, the controls are disabled and the top-left window is
 shown.
 
-\paragraph{Scrollbars.} To show \emph{where} the viewport sits, the renderer
+\paragraph{Scrollbars.} To show where the viewport sits, the renderer
 draws a scrollbar in each clipped direction: a vertical bar in the rightmost
 column (a heavy solid thumb, U+2503, over a dotted track, U+250A) and a
 horizontal bar in a row under the grid (heavy U+2501 over dotted U+2508) --- the
@@ -1481,7 +1481,7 @@ calling \texttt{render()} on the final board (still panning/pausing) until
 exits normally and never hangs.
 
 \paragraph{Robustness details.} A per-frame \texttt{\textbackslash 033[?2026h/l}
-pair asks the terminal for a \emph{synchronized} (tear-free) update and is
+pair asks the terminal for a synchronized (tear-free) update and is
 silently ignored where unsupported; \texttt{\textbackslash 033[K} wipes any
 leftover from a previously wider frame and \texttt{\textbackslash 033[J} wipes
 rows orphaned by a shrunk terminal; the cursor is hidden during animation and
@@ -1495,9 +1495,9 @@ back to $80\times24$.
 \label{sec:gui}
 
 The viewer (\texttt{gol\_gui}) is the project's answer to Tarea 3 (``Interop --
-Shaders''): a real-time window that animates the \emph{same} simulation the
+Shaders''): a real-time window that animates the same simulation the
 headless \texttt{gol} benchmarks. Its reason to exist is one idea --- display the
-GPU-computed board \emph{without copying it back to the host}. The compute API
+GPU-computed board without copying it back to the host. The compute API
 (CUDA) and the graphics API (OpenGL) share one device buffer, so the board is
 born, stepped, and drawn entirely in GPU memory; only keystrokes cross the PCIe
 bus. Everything else in this section follows from making that sharing work, and
@@ -1507,12 +1507,12 @@ from degrading gracefully to a plain host copy when it cannot.
 
 It would be natural to add a \texttt{GuiRenderer} alongside \texttt{TextRenderer}
 and \texttt{AnsiRenderer}. That does not work, for two structural reasons. First,
-\textbf{Qt owns the loop}: \texttt{QApplication::exec()} \emph{is} the event loop
+Qt owns the loop: \texttt{QApplication::exec()} is the event loop
 and calls back into the widget (via \texttt{paintGL} and timers), so the
 application cannot keep \texttt{main.cpp}'s \texttt{for (gen\dots)\{ step; render \}}
-loop. Second, \texttt{IRenderer::render(const Grid\&, gen)} takes a \emph{host}
+loop. Second, \texttt{IRenderer::render(const Grid\&, gen)} takes a host
 \texttt{Grid} --- exactly the host copy interop exists to avoid. So the viewer is a
-\textbf{peer front-end} on the same core, not a renderer plugged into the old
+peer front-end on the same core, not a renderer plugged into the old
 loop: it is its own executable (\texttt{gol\_gui}), gated on \texttt{BUILD\_GUI},
 and the headless \texttt{gol} never links Qt or OpenGL.
 
@@ -1524,7 +1524,7 @@ panel, wired with Qt signals/slots. \texttt{GolGlWidget} (a \texttt{QOpenGLWidge
 is the heart: it owns an \texttt{ISimEngine} (the unchanged CPU or CUDA engine),
 a \texttt{CudaGlInterop} bridge, the host \texttt{Grid} used for seeding and for
 the host-upload path, and a snapshot \texttt{initialGrid\_} for Reset. The widget
-thus \emph{composes} the existing strategy interface rather than extending it.
+thus composes the existing strategy interface rather than extending it.
 
 \insertimage{gui_architecture}{height=0.78\textheight,keepaspectratio}{Components of the viewer.
 \texttt{MainWindow} owns \texttt{GolGlWidget}; the widget drives an
@@ -1568,7 +1568,7 @@ void CudaEngine::pokeCell(std::size_t x, std::size_t y, unsigned char value) {
 The bridge is the only place that touches both APIs, so it is isolated in a
 \texttt{.cu} (compiled by nvcc, which sees \texttt{cuda\_gl\_interop.h}) behind a
 CUDA-free header (so the Qt widget compiles with the host compiler). The contract
-is the classic interop dance: \textbf{register once}, then \textbf{per frame}
+is the classic interop dance: register once, then per frame
 map\,$\rightarrow$\,write\,$\rightarrow$\,unmap. Registering tells the driver that
 a GL buffer and a CUDA resource are the same memory; mapping hands ownership to
 CUDA so neither API touches it mid-operation.
@@ -1594,9 +1594,9 @@ the engine's \texttt{dCur\_} and \texttt{dPtr} is the GL buffer's memory, both o
 the same GPU, so the copy never leaves the device. This is what ``zero-copy''
 means here --- zero copies across PCIe, not zero copies at all (the on-GPU D2D
 copy runs at hundreds of GB/s). Keeping the engine's ping-pong intact and copying
-\emph{out} of it, rather than letting \texttt{step} write straight into the GL
+out of it, rather than letting \texttt{step} write straight into the GL
 buffer, is deliberate: the engine's contract (Section~\ref{sec:interfaces}) is
-untouched, and the viewer only ever \emph{reads} the current buffer.
+untouched, and the viewer only ever reads the current buffer.
 
 \subsection{Widget lifecycle --- \texttt{initializeGL}}
 
@@ -1643,9 +1643,9 @@ if (cudaEngine_) {                            // a CUDA engine? try zero-copy
 \label{sec:gui-paths}
 
 Figure~\ref{fig:gui-dataflow} contrasts the two paths the previous snippet selects
-between. In \textbf{Interop} mode the bridge copies \texttt{dCur\_} into the PBO
+between. In Interop mode the bridge copies \texttt{dCur\_} into the PBO
 (device-to-device), and \texttt{glTexSubImage2D} streams the PBO into the texture
---- both on the GPU. In \textbf{HostUpload} mode the engine's
+--- both on the GPU. In HostUpload mode the engine's
 \texttt{download(grid\_)} pulls the board to host RAM (a D2H \texttt{cudaMemcpy}
 for CUDA, a plain copy for the CPU engine), and \texttt{glTexSubImage2D} uploads
 it from client memory --- two PCIe crossings. The CPU engine has no device buffer,
@@ -1662,8 +1662,8 @@ path (its board already lives in host RAM). \label{fig:gui-dataflow}}
 \subsection{The frame: present, then step}
 \label{sec:gui-frame}
 
-\texttt{paintGL} draws one frame. The order matters: it \textbf{presents the
-current board first, then advances}. The obvious order (step, then present) has a
+\texttt{paintGL} draws one frame. The order matters: it presents the
+current board first, then advances. The obvious order (step, then present) has a
 subtle bug for interactive editing --- a cell painted between frames would be
 consumed by \texttt{step} before it was ever drawn, so a lone live cell (which dies
 immediately under \texttt{B36/S23}, needing two or three neighbours) would seem to
@@ -1695,8 +1695,8 @@ if (playing_ && engine_)
 \subsection{The shaders}
 \label{sec:gui-shaders}
 
-The board is drawn as a textured \textbf{fullscreen triangle}: a single oversized
-triangle covers the screen with one draw call and \emph{no vertex buffer} --- the
+The board is drawn as a textured fullscreen triangle: a single oversized
+triangle covers the screen with one draw call and no vertex buffer --- the
 three positions come from \texttt{gl\_VertexID}. This is the standard way to run a
 fragment shader over every pixel.
 
@@ -1713,13 +1713,13 @@ it. Zoom is pixels-per-cell (\texttt{uScale}); pan is the board cell shown at th
 screen centre (\texttt{uCenter}). A \texttt{uColorMode} uniform selects one of three
 looks --- a flat alive/dead binary view, a live-neighbour-count ramp (samples the
 eight neighbours straight from the texture --- free, no extra buffer), or an
-\emph{age heatmap} that colours a live cell by how many generations it has survived
+age heatmap that colours a live cell by how many generations it has survived
 --- and a \texttt{uPalette} uniform maps the resulting scalar $t\in[0,1]$ through
 one of six colour ramps (grayscale by default, plus phosphor, amber, magma, ice, and
-\emph{spectrum}). The last is aimed at the age heatmap: unlike the others, which vary
-\emph{brightness} between a dark and a light end (so on a single-hue ramp like phosphor
+spectrum). The last is aimed at the age heatmap: unlike the others, which vary
+brightness between a dark and a light end (so on a single-hue ramp like phosphor
 or grayscale young and old cells differ only in shade and are hard to tell apart), it
-rotates \emph{hue} at fixed brightness --- red\,($t{=}0$, new) through green to
+rotates hue at fixed brightness --- red\,($t{=}0$, new) through green to
 blue\,($t{=}1$, old) --- so age is read as colour, which the eye separates far more
 readily. The age value
 comes from a second \texttt{GL\_R8UI} texture (\texttt{uAge}); see below. Finally,
@@ -1757,17 +1757,17 @@ void main() {
 
 The age heatmap is the one mode that needs state beyond the current board. Rather than
 a GPU feedback pass, the widget keeps a host-side \texttt{age\_} byte per cell and
-updates it \textbf{once per generation} (\texttt{age = alive ? min(age+1,255) : 0}),
+updates it once per generation (\texttt{age = alive ? min(age+1,255) : 0}),
 uploading it to the \texttt{uAge} texture. The update is gated on the generation
 counter (so a paused or merely re-panned frame does not keep ageing cells) and runs
-\textbf{only while age mode is active} --- the binary and neighbour modes, and the
+only while age mode is active --- the binary and neighbour modes, and the
 CUDA interop zero-copy path, never pay for it. When the mode is on with a CUDA engine
 the widget does download the board each generation to drive the update; that is the
 one place the age view trades a copy for the extra channel of information.
 
 The shaders are GLSL \texttt{\#version 330} core --- the viewer uses nothing past
 GL 3.3 (integer textures, \texttt{texelFetch}, VAOs), so 3.3 maximises the range
-of drivers it runs on. They are \textbf{read at runtime} from
+of drivers it runs on. They are read at runtime from
 \texttt{src/gui/shaders/} (the path baked in at configure time), mirroring how the
 OpenCL backend loads \texttt{kernel.cl} --- editable without recompiling.
 
@@ -1777,7 +1777,7 @@ OpenCL backend loads \texttt{kernel.cl} --- editable without recompiling.
 Mouse picking is the inverse of the shader's pixel\,$\rightarrow$\,cell map, so
 what the cursor points at is exactly what the shader drew there. Left-drag paints
 (Shift erases) via \texttt{pokeCell}; middle/right-drag pans; the wheel zooms about
-the cursor. The \textbf{P} key saves a PNG of the current view to the working
+the cursor. The P key saves a PNG of the current view to the working
 directory via \texttt{QOpenGLWidget::grabFramebuffer} --- handy for capturing report
 figures without an external screen-grabber.
 
@@ -1794,7 +1794,7 @@ void GolGlWidget::paintAt(QPointF pos, unsigned char value) {
 }
 \end{sourcecode}
 
-\textbf{Reset} restores the board to generation 0 of the current pattern. It needs
+Reset restores the board to generation 0 of the current pattern. It needs
 its own snapshot because \texttt{grid\_} is reused as the host-upload scratch
 buffer and is overwritten every frame; so a separate \texttt{initialGrid\_} is
 captured at each generation-0 event (initial seed, \texttt{reseed}, \texttt{clear},
@@ -1812,11 +1812,11 @@ void GolGlWidget::resetToInitial() {
 
 Patterns load through the existing \texttt{RleLoader}\,/\,\texttt{Pattern} pipeline
 (Section~\ref{sec:patterns}): \texttt{--rle PATH} seeds at startup, and an
-\textbf{Open RLE\dots} button opens a \texttt{QFileDialog} that stamps a pattern
+Open RLE\dots button opens a \texttt{QFileDialog} that stamps a pattern
 centred at runtime. The control panel's buttons, sliders, and combo boxes are plain
 Qt widgets connected to the widget's public slots with \texttt{connect(\dots)} ---
-including a \textbf{Screenshot} button, a \emph{Colour} combo (binary / neighbour
-count / age heatmap) and a \emph{Palette} combo (grayscale by default, plus phosphor /
+including a Screenshot button, a Colour combo (binary / neighbour
+count / age heatmap) and a Palette combo (grayscale by default, plus phosphor /
 amber / magma / ice / spectrum). A per-frame \texttt{statsChanged} signal updates the generation/FPS/zoom
 labels, a \texttt{screenshotSaved} signal flashes the saved path in the status bar,
 and a one-shot \texttt{backendInfo} signal puts the active engine and present mode in
@@ -1826,14 +1826,14 @@ the window title.
 \label{sec:gui-portability}
 
 Because the CPU engine uses the host-upload path, \texttt{gol\_gui} builds and runs
-\textbf{with no CUDA toolkit at all}; CUDA only adds the zero-copy path. This is
+with no CUDA toolkit at all; CUDA only adds the zero-copy path. This is
 the main portability win, and it is reflected in the build wiring
 (Section~\ref{sec:cmake}, Figure~\ref{fig:gui-arch}).
 
 One environment caveat is worth recording because it is not obvious. The
-development machine is an \textbf{Optimus} laptop (NVIDIA dGPU + Intel iGPU), and
-on it OpenGL defaults to the \emph{Intel} iGPU. Interop requires the GL context
-and CUDA to be on the \emph{same} GPU, so on a default context
+development machine is an Optimus laptop (NVIDIA dGPU + Intel iGPU), and
+on it OpenGL defaults to the Intel iGPU. Interop requires the GL context
+and CUDA to be on the same GPU, so on a default context
 \texttt{cudaGraphicsGLRegisterBuffer} fails --- which is exactly the
 fallback-to-host-upload case above (the viewer still runs, just with the PCIe
 round trip). To get the zero-copy path, the GL context must be placed on the
@@ -1880,7 +1880,7 @@ endif()
 The \texttt{Q\_OBJECT} headers live apart from their \texttt{.cpp} (in
 \texttt{include/gol/gui/}), so they are listed explicitly in the target for AUTOMOC
 to scan --- it only auto-pairs same-directory basenames. The CLI mirrors the
-headless \texttt{gol} flags that define \emph{what} to simulate
+headless \texttt{gol} flags that define what to simulate
 (\texttt{--rows}/\texttt{--cols}/\texttt{--gens}/\texttt{--threads}/\texttt{--wrap}/%
 \texttt{--seed}/\texttt{--rle}/\texttt{--engine cpu|cuda}/\texttt{--block}, plus a
 \texttt{COLSxROWS} shorthand); the headless-only flags (\texttt{--renderer},
@@ -1918,8 +1918,8 @@ if(BUILD_CUDA)
 endif()
 \end{sourcecode}
 
-Each GPU backend is \textbf{double-gated}: an \texttt{option(... OFF)}
-\emph{and} an \texttt{if(EXISTS <source>)} check, so passing
+Each GPU backend is double-gated: an \texttt{option(... OFF)}
+and an \texttt{if(EXISTS <source>)} check, so passing
 \texttt{-DBUILD\_CUDA=ON} on a tree without the \texttt{.cu} source emits a warning
 and skips the target rather than failing configuration. Both sources now exist, so
 the flags build \texttt{gol\_cuda}\,/\,\texttt{gol\_opencl} (each also carrying its
@@ -1957,21 +1957,21 @@ The tests are not an afterthought; they encode the invariants from Section
 (\texttt{CpuEngine} is the oracle, so it is verified first).
 
 \begin{itemize}
-	\item \textbf{\texttt{compile\_smoke\_test.cpp}} includes \emph{every}
+	\item \texttt{compile\_smoke\_test.cpp} includes every
 	      interface header (so the scaffolding stays build-clean and mutually
 	      consistent) but deliberately does not call the declared-but-undefined
 	      symbols, so it links without those translation units. Its
 	      \texttt{VariantRule} case pins the rule truth table directly.
-	\item \textbf{\texttt{rules\_test.cpp}} checks \texttt{CpuEngine} on known
+	\item \texttt{rules\_test.cpp} checks \texttt{CpuEngine} on known
 	      patterns: a block is a still-life, a blinker oscillates with period 2,
 	      and --- the defining case --- a dead cell with exactly six live
 	      neighbours is born.
-	\item \textbf{\texttt{cpu\_parallel\_test.cpp}} proves the central design
+	\item \texttt{cpu\_parallel\_test.cpp} proves the central design
 	      claim. On a deliberately non-square, non-thread-divisible $128\times130$
 	      grid it asserts thread counts $\{2,3,4,8,0\}$ all match the single-thread
-	      reference \emph{bit-for-bit}, in both edge modes; a second case targets
+	      reference bit-for-bit, in both edge modes; a second case targets
 	      \texttt{rangeFor}'s remainder logic with $17\times9$ and counts $4,5$.
-	\item \textbf{\texttt{rle\_loader\_test.cpp}} covers parsing, dimensions,
+	\item \texttt{rle\_loader\_test.cpp} covers parsing, dimensions,
 	      specific coordinates (including that \texttt{birth\_on\_six}'s centre is
 	      dead), the missing-file throw, and stamping with clipping.
 \end{itemize}
@@ -1985,8 +1985,8 @@ for (unsigned threads : {2u, 3u, 4u, 8u, 0u /* all hw cores */}) {
 }
 \end{sourcecode}
 
-\paragraph{The fourth test: cross-backend equivalence.} \emph{Done for both GPU
-backends.} \texttt{cuda\_equivalence\_test.cpp} and
+\paragraph{The fourth test: cross-backend equivalence.} Done for both GPU
+backends. \texttt{cuda\_equivalence\_test.cpp} and
 \texttt{opencl\_equivalence\_test.cpp} seed their engine and the
 \texttt{CpuEngine} oracle identically and assert bit-for-bit equality across block
 sizes $\{32,64,128,256\}$, both kernels (global/shared) and both edge modes; each
@@ -2066,7 +2066,7 @@ reuse neighbour reads. Here each cell is one byte and the L2 already serves the
 reuse, so the staging saves no DRAM traffic ($\approx 2$ B/cell either way) while
 adding a barrier and dropping L1 reuse --- it runs $\approx 0.5\times$ the global
 kernel (a $\approx 1.8$--$2.1\times$ penalty), on both CUDA and OpenCL. Explaining
-\emph{why} is one of the more interesting parts of the report.
+why is one of the more interesting parts of the report.
 
 \paragraph{Launch overhead dominates at small grids.} With few cells there are too
 few blocks to fill the SMs, so per-step launch cost dominates: the GPU's
@@ -2078,7 +2078,7 @@ compute-bound CPU at every measured $N$; a classic $S(N) < 1$ regime appears onl
 once the PCIe transfer cost is counted. The sweeps therefore run from small to large
 $N\times M$ to expose both the efficiency knee and the asymptote.
 
-The deep-dive profiling targets the \emph{best} parallel solution only:
+The deep-dive profiling targets the best parallel solution only:
 \texttt{ncu} (Nsight Compute) for CUDA kernel-internal metrics --- occupancy,
 stalls, memory throughput (it will not profile OpenCL) --- and \texttt{nsys}
 (Nsight Systems) for the system timeline, which can also trace OpenCL on NVIDIA
@@ -2096,14 +2096,14 @@ queue-event timing; Section \ref{sec:opencl}), the \texttt{HybridEngine}
 (CPU\,+\,GPU with static load balancing, ghost-row decomposition; Section
 \ref{sec:hybrid}), and the CSV benchmark-output mode
 (\texttt{--csv}/\texttt{--csv-header}). Test suites: CPU rules,
-sequential-vs-parallel, RLE loader, the cross-backend equivalence of \emph{both}
+sequential-vs-parallel, RLE loader, the cross-backend equivalence of both
 GPU engines against the CPU oracle, and the hybrid equivalence across splits and
 edge modes (Sections \ref{sec:cuda}, \ref{sec:opencl}, \ref{sec:hybrid}). The
 CPU engine is the reference oracle. The benchmark sweeps (\texttt{scripts/sweep.sh},
 now CPU + CUDA + OpenCL + hybrid), the results CSVs, the analysis notebook
 (\texttt{analysis/results.ipynb}), and the Nsight (\texttt{ncu}/\texttt{nsys})
 profiling of the best CUDA kernel are also done and populate \texttt{main.tex}.
-The interactive \textbf{Qt\,+\,OpenGL viewer} (\texttt{gol\_gui}) is also done
+The interactive Qt\,+\,OpenGL viewer (\texttt{gol\_gui}) is also done
 (Section~\ref{sec:gui}): CUDA\,$\leftrightarrow$\,OpenGL zero-copy interop with a
 host-upload fallback, the CPU engine supported with no CUDA toolkit, live
 paint/zoom/pan, RLE loading, and reset.
