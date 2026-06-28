@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# sweep.sh -- benchmark sweeps for the Game of Life CPU/CUDA backends.
+# sweep.sh -- benchmark sweeps for the Game of Life CPU/CUDA/OpenCL/hybrid backends.
 #
 # Produces two Pandas-ready CSVs under results/ (columns are the binary's own
 # --csv schema: backend,rows,cols,generations,threads,block,shared,wrap,
@@ -43,6 +43,11 @@ BEST_CUDA_SHARED="${BEST_CUDA_SHARED:-0}"
 
 BEST_OPENCL_BLOCK="${BEST_OPENCL_BLOCK:-128}"
 BEST_OPENCL_SHARED="${BEST_OPENCL_SHARED:-0}"
+
+# Hybrid (CPU + GPU, static load balancing). The split is auto-calibrated per run.
+HYBRID_GPU="${HYBRID_GPU:-cuda}"      # GPU backend the CPU is paired with
+HYBRID_THREADS="${HYBRID_THREADS:-0}" # CPU workers for the hybrid's CPU slice (0 = all cores)
+HYBRID_CALIB="${HYBRID_CALIB:-10}"    # calibration steps per node (a-priori, off the metric)
 
 declare -A GENS=(
   [64]=2000 [128]=1000 [256]=500 [512]=200 [1024]=100
@@ -204,6 +209,23 @@ for n in "${SCALE_GRIDS[@]}"; do
       "$n" "$BEST_OPENCL_BLOCK" "$BEST_OPENCL_SHARED" "$g" "$rep" >&2
 
     run_repeats "$SCALING_CSV" "$rep" "${args[@]}" || true
+  fi
+
+  # Hybrid (CPU + GPU, static load balancing, auto-calibrated split). The
+  # recorded mcells exclude the calibration phase (it lands in upload, not the
+  # timed loop). Steady-state rate ~ the GPU rate, so plan repeats off that.
+  rate="$(gpu_rate_for "$HYBRID_GPU")"
+  pred="$(awk -v c="$cells" -v r="$rate" 'BEGIN{ printf "%.3f", c/r }')"
+  rep="$(plan_repeats "$pred")"
+
+  if [[ "$rep" -ne 0 ]]; then
+    printf '[B] hybrid N=%-5s gpu=%-6s t=%-2s G=%-4s x%s\n' \
+      "$n" "$HYBRID_GPU" "$HYBRID_THREADS" "$g" "$rep" >&2
+
+    run_repeats "$SCALING_CSV" "$rep" --engine hybrid \
+      --gpu-backend "$HYBRID_GPU" --threads "$HYBRID_THREADS" \
+      --block "$BEST_CUDA_BLOCK" --calib-steps "$HYBRID_CALIB" \
+      -r "$n" -c "$n" -g "$g" || true
   fi
 done
 

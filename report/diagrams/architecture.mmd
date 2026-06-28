@@ -51,6 +51,32 @@ classDiagram
     -useShared_ bool
     +step()
   }
+  class HybridEngine {
+    -cpuRows_ size_t
+    -gpuRows_ size_t
+    -wrap_ bool
+    -partition_ IHaloPartition
+    -barrier_ barrier
+    +upload(Grid)
+    +step()
+  }
+  class IHaloPartition {
+    <<interface>>
+    +uploadRegion(rows, cols, wrap)
+    +setTopGhost(row) void
+    +setBottomGhost(row) void
+    +launchStep() void
+    +finishStep() void
+    +downloadRegion(out) void
+  }
+  class CudaHaloPartition {
+    -blockSize_ int
+    +launchStep()
+  }
+  class OpenCLHaloPartition {
+    -blockSize_ int
+    +launchStep()
+  }
 
   class NullRenderer {
     +render(Grid, gen)
@@ -106,6 +132,7 @@ classDiagram
     Cpu
     Cuda
     OpenCL
+    Hybrid
   }
   class RendererKind {
     <<enumeration>>
@@ -117,6 +144,9 @@ classDiagram
   ISimEngine <|.. CpuEngine
   ISimEngine <|.. CudaEngine
   ISimEngine <|.. OpenCLEngine
+  ISimEngine <|.. HybridEngine
+  IHaloPartition <|.. CudaHaloPartition
+  IHaloPartition <|.. OpenCLHaloPartition
   IRenderer <|.. NullRenderer
   IRenderer <|.. TextRenderer
   IRenderer <|.. AnsiRenderer
@@ -131,6 +161,8 @@ classDiagram
   CpuEngine ..> Timer : kernel timing
   CudaEngine ..> LifeRules : nextState()
   OpenCLEngine ..> LifeRules : mirrors in kernel.cl
+  HybridEngine --> IHaloPartition : owns (GPU slice)
+  HybridEngine ..> LifeRules : nextState() (CPU slice)
   RleLoader ..> Pattern : produces
   Pattern ..> Grid : applyTo()
   Config --> EngineKind

@@ -69,6 +69,7 @@ if(BUILD_CUDA)
         add_library(gol_cuda
             ${_cuda_src}
             ${CMAKE_CURRENT_SOURCE_DIR}/src/engines/cuda/kernel.cu
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/engines/cuda/CudaHaloPartition.cu
         )
         # gol_cuda only consumes header-only pieces (LifeRules.hpp, Grid.hpp), so it
         # needs gol_core's include dir but must NOT link gol_core -- that would
@@ -102,7 +103,10 @@ if(BUILD_OPENCL)
     if(EXISTS ${_opencl_src})
         find_package(OpenCL REQUIRED)
 
-        add_library(gol_opencl ${_opencl_src})
+        add_library(gol_opencl
+            ${_opencl_src}
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/engines/opencl/OpenCLHaloPartition.cpp
+        )
         target_link_libraries(gol_opencl PUBLIC gol_core OpenCL::OpenCL)
 
         # kernel.cl is read at runtime (per the design), so bake in its absolute
@@ -182,6 +186,29 @@ if(BUILD_GUI)
     # Shaders are read at runtime (like kernel.cl), so bake in their source dir.
     target_compile_definitions(gol_gui PRIVATE
         GOL_GUI_SHADER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/gui/shaders" ${_gui_defs})
+endif()
+
+# ----------------------------------------------------------------------------
+# Optional hybrid CPU+GPU engine (static load balancing). Needs at least one GPU
+# backend; links whichever of gol_cuda / gol_opencl was configured and selects
+# between them at runtime (--gpu-backend). Compiled by the host C++ compiler.
+# ----------------------------------------------------------------------------
+if(GOL_CUDA_ENABLED OR GOL_OPENCL_ENABLED)
+    add_library(gol_hybrid src/engines/hybrid/HybridEngine.cpp)
+    target_link_libraries(gol_hybrid PUBLIC gol_core Threads::Threads)
+    if(GOL_CUDA_ENABLED)
+        target_link_libraries(gol_hybrid PUBLIC gol_cuda)
+        target_compile_definitions(gol_hybrid PRIVATE GOL_HAVE_CUDA)
+    endif()
+    if(GOL_OPENCL_ENABLED)
+        target_link_libraries(gol_hybrid PUBLIC gol_opencl)
+        target_compile_definitions(gol_hybrid PRIVATE GOL_HAVE_OPENCL)
+    endif()
+
+    # Wire the hybrid engine into the application.
+    target_link_libraries(gol PRIVATE gol_hybrid)
+    target_compile_definitions(gol PRIVATE GOL_HAVE_HYBRID)
+    set(GOL_HYBRID_ENABLED ON)                 # consumed by tests/
 endif()
 
 # ----------------------------------------------------------------------------

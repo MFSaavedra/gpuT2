@@ -106,7 +106,10 @@ considera la siguiente \emph{variación} de las reglas estándar:
 El objetivo es implementar el algoritmo en CPU (secuencial), CUDA y OpenCL, medir
 su rendimiento en \emph{células evaluadas por segundo}, comparar dos técnicas de
 optimización del kernel y analizar el \emph{speed-up} respecto de la versión
-secuencial, determinando desde qué tamaño de grilla conviene usar la GPU.
+secuencial, determinando desde qué tamaño de grilla conviene usar la GPU. Como
+extensión, se implementa además un cuarto motor \textbf{híbrido CPU+GPU} que reparte
+el tablero por filas mediante \textbf{balance de carga estático} (teoría de carga
+divisible, Barlas \S11.3; Sección~\ref{sec:impl-hibrido}).
 
 \subsection{Resultados esperados}
 \label{sec:resultados-esperados}
@@ -142,11 +145,14 @@ clases y relaciones.
 
 \insertimage{uml_architecture}{width=\linewidth}{Diagrama de clases del proyecto.
 La \texttt{Application} posee un \texttt{ISimEngine} y un \texttt{IRenderer} (las
-dos estrategias). \texttt{CpuEngine}, \texttt{CudaEngine} y \texttt{OpenCLEngine}
-realizan \texttt{ISimEngine}. Las flechas punteadas son dependencias:
-\texttt{CpuEngine} y \texttt{CudaEngine} usan \texttt{LifeRules::nextState}
-directamente, mientras que \texttt{OpenCLEngine} replica esa misma regla en
-\texttt{kernel.cl} (leído en tiempo de ejecución). \label{fig:uml}}
+dos estrategias). \texttt{CpuEngine}, \texttt{CudaEngine}, \texttt{OpenCLEngine} e
+\texttt{HybridEngine} realizan \texttt{ISimEngine}; el híbrido además posee un
+\texttt{IHaloPartition} (realizado por \texttt{CudaHaloPartition} /
+\texttt{OpenCLHaloPartition}) para su porción de GPU. Las flechas punteadas son
+dependencias: \texttt{CpuEngine} y \texttt{CudaEngine} usan
+\texttt{LifeRules::nextState} directamente, mientras que \texttt{OpenCLEngine}
+replica esa misma regla en \texttt{kernel.cl} (leído en tiempo de ejecución).
+\label{fig:uml}}
 
 Tres decisiones del núcleo hacen posible comparar los backends de forma justa:
 
@@ -376,6 +382,76 @@ NVIDIA la plataforma es ``NVIDIA CUDA'', así que OpenCL baja por el mismo backe
 PTX/SASS que CUDA ---y, como muestran los resultados
 (Sección~\ref{sec:res-opciones}), rinde casi igual.
 
+\subsection{Implementación híbrida CPU+GPU con balance de carga estático}
+\label{sec:impl-hibrido}
+
+El motor híbrido (\texttt{HybridEngine}) ejecuta \textbf{la CPU y una GPU sobre el
+mismo tablero a la vez}, repartiendo el trabajo por filas. Es un \texttt{ISimEngine}
+más, pero internamente son dos motores unidos por una costura, con el reparto
+elegido mediante \textbf{balance de carga estático} según el enfoque de \emph{teoría
+de carga divisible} (DLT) de Barlas, \emph{Multicore and GPU Programming} (2\textsuperscript{a}
+ed.), \S11.3.
+
+\paragraph{Descomposición por filas con celdas fantasma.} El paso de Game of Life es
+un \emph{stencil} de 9 puntos. Si la CPU toma las filas $[0,s)$ y la GPU las
+$[s,R)$, los dos bloques solo interactúan en la costura: cada lado necesita una fila
+del estado actual del otro para actualizar su fila de borde. Es la misma ``fila
+extra'' que la \S11.3 asocia a la convolución de imágenes, y es lo que vuelve la
+carga \emph{divisible}: la comunicación por generación es una sola fila en cada
+sentido, independiente de cuántas filas posea cada lado. Para ello cada bloque lleva
+una fila \textbf{fantasma} (\emph{ghost}) arriba y otra abajo de sus filas reales; la
+CPU guarda su bloque en \emph{buffers} de \emph{host} y la GPU en \emph{buffers} de
+\emph{device}, cada lado hace \emph{ping-pong} localmente, y el tablero completo solo
+se reensambla en \texttt{download()}. Así el grueso de los datos nunca cruza el bus
+PCIe durante la corrida: solo lo hacen las filas fantasma.
+
+\paragraph{Kernel con halo.} Los kernels existentes funden el borde vertical y el
+horizontal en un solo \texttt{wrap}, lo cual es incorrecto para un sub-bloque (en la
+costura el ``borde'' es el dato del vecino, no el límite del tablero). El híbrido usa
+un kernel propio ---\texttt{lifeHalo} en \texttt{kernel.cu}, \texttt{life\_halo} en
+\texttt{kernel.cl}--- que \textbf{lee los vecinos verticales de las filas fantasma}
+(sin lógica de borde vertical) y aplica solo la regla de borde \emph{horizontal}. El
+\emph{host} llena las fantasmas según el modo de borde (acotado: fantasmas externas
+en cero/muertas; toroidal: se envuelven sobre el otro bloque), por lo que un mismo
+kernel sirve para ambos modos y el resultado es idéntico bit a bit al oráculo de CPU.
+La mitad de CPU usa la misma idea reutilizando \texttt{LifeRules::nextState}.
+
+\paragraph{Elección del reparto.} DLT modela el tiempo de cada nodo como afín a su
+porción. Despreciando la (mínima) comunicación, el nodo $i$ que recibe la fracción
+$\mathrm{part}_i$ de las $L$ celdas tarda $t_i \approx \mathrm{part}_i\,L / R_i$, con
+$R_i$ su rendimiento en celdas/s. El óptimo ---el que la \S11.3 prueba que minimiza
+la duración total--- es el reparto donde \emph{ambos nodos terminan a la vez}; para
+dos nodos:
+%
+\begin{equation}
+	\mathrm{part}_{\mathrm{gpu}} = \frac{R_{\mathrm{gpu}}}{R_{\mathrm{cpu}}+R_{\mathrm{gpu}}},
+	\qquad
+	\mathrm{part}_{\mathrm{cpu}} = \frac{R_{\mathrm{cpu}}}{R_{\mathrm{cpu}}+R_{\mathrm{gpu}}},
+	\label{eq:dlt-split}
+\end{equation}
+%
+que se redondea a un corte de filas $s = \mathrm{round}(\mathrm{part}_{\mathrm{cpu}}\,R)$.
+Los rendimientos provienen de una de dos fuentes, ambas \emph{estáticas} (el reparto
+se decide una sola vez y luego se congela): \texttt{--cpu-frac F} fija
+$\mathrm{part}_{\mathrm{cpu}}=F$ directamente (un valor de modelo de costo \emph{offline});
+o, por defecto, una breve \textbf{fase de calibración \emph{a priori}} (la ``fase de
+inicialización'' del esquema de dos fases de la \S11.3) que, dentro de
+\texttt{upload()}, cronometra \texttt{--calib-steps} pasos solo-CPU y solo-GPU sobre
+la grilla real, estima $R_{\mathrm{cpu}}$ y $R_{\mathrm{gpu}}$ y calcula el corte. La
+calibración vive en \texttt{upload()}, así que su costo cae en el tiempo de carga y
+nunca entra en la métrica de celdas/s.
+
+\paragraph{Paso concurrente.} Cada \texttt{step()} intercambia las fantasmas, lanza
+el kernel de la GPU de forma \emph{asíncrona}, computa las filas de CPU en el
+\emph{pool} de hilos persistente (el mismo de \texttt{CpuEngine})
+\textbf{concurrentemente}, y recién entonces sincroniza la GPU. \texttt{lastKernelMillis()}
+reporta el tiempo de pared de esa región concurrente, es decir, aproximadamente el
+\emph{máximo} de los dos nodos ---justo lo que el óptimo iguala. La mitad de GPU se
+abstrae tras una interfaz pequeña (\texttt{IHaloPartition}) con realizaciones para
+CUDA y OpenCL en las bibliotecas correspondientes; \texttt{--gpu-backend} elige entre
+ellas en tiempo de ejecución. El híbrido usa solo el kernel de halo de memoria global
+(la opción de memoria compartida se estudia sobre los motores de GPU puros).
+
 \subsection{Variaciones de configuración}
 \label{sec:variaciones}
 
@@ -412,6 +488,13 @@ verifican, en orden de dependencia:
 	      global/compartido y ambos modos de borde. Además verifican el viaje de ida
 	      y vuelta \emph{host}\,$\leftrightarrow$\,\emph{device} (sin \emph{step}) y
 	      la reutilización de un mismo motor entre grillas de distinto tamaño.
+		\item \textbf{Equivalencia del híbrido}: \texttt{hybrid\_equivalence\_test.cpp}
+		      exige que \texttt{HybridEngine} coincida bit a bit con el oráculo para las
+		      fracciones de CPU $\{0,0.25,0.5,0.75,1\}$ ---los extremos $0$ y $1$ ejercen
+		      los caminos degenerados solo-GPU y solo-CPU---, para un reparto calibrado y
+		      una mitad de CPU secuencial, en ambos modos de borde y sobre una grilla no
+		      cuadrada $130\times127$ (corte a mitad de bloque), por cada backend de GPU
+		      compilado.
 \end{itemize}
 
 Adicionalmente, el runner \texttt{bgolly} de Golly (grilla infinita) simula
@@ -431,7 +514,9 @@ La métrica principal es \emph{células evaluadas por segundo}:
 con $G$ el número de generaciones. El cronometraje es uniforme y en programa (no
 desde un \emph{profiler}), expuesto por \texttt{ISimEngine::lastKernelMillis()}:
 \texttt{std::chrono} en CPU, \texttt{cudaEvent\_t} en CUDA y eventos de cola en
-OpenCL. Se reporta el tiempo de kernel por separado del de transferencias, y se
+OpenCL; el híbrido usa \texttt{std::chrono} alrededor de toda la región concurrente
+(CPU y GPU a la vez), por lo que su cifra es el tiempo de pared del paso conjunto.
+Se reporta el tiempo de kernel por separado del de transferencias, y se
 mide siempre con el \texttt{NullRenderer} para que el costo de salida y de
 transferencia no contamine la métrica. El \emph{speed-up} es
 %
@@ -450,13 +535,15 @@ encabezado una vez y agrega una fila por configuración, lista para Pandas.
 \label{sec:ejecutables}
 
 El proyecto compila un único ejecutable \texttt{gol} que arma en tiempo de
-ejecución el motor (\texttt{--engine cpu|cuda|opencl}) y el \emph{renderer}
+ejecución el motor (\texttt{--engine cpu|cuda|opencl|hybrid}) y el \emph{renderer}
 (\texttt{--renderer null|text|ansi}) según la línea de comandos, siembra la grilla
 (con una semilla aleatoria determinista o un patrón RLE) y ejecuta el bucle de
 generaciones. Bajo \texttt{NullRenderer} el bucle es solo \texttt{step()}, sin
 transferencias ni dibujado, de modo que la medición no se contamina. Los motores
 de GPU son opcionales en CMake (\texttt{-DBUILD\_CUDA=ON}); el binario funciona
-en una máquina sin CUDA ni OpenCL.
+en una máquina sin CUDA ni OpenCL (donde \texttt{--engine hybrid} no está
+disponible y se reporta como tal). El híbrido añade \texttt{--cpu-frac},
+\texttt{--gpu-backend} y \texttt{--calib-steps}.
 
 \section{Cotas teóricas de rendimiento}
 \label{sec:cotas}
@@ -835,6 +922,31 @@ tamaño de bloque/\emph{work-group}, memoria global (sólido) frente a local/com
 		\bottomrule
 	\end{tabular}
 \end{table}
+
+\subsection{Híbrido CPU+GPU: reparto estático (preliminar)}
+\label{sec:res-hibrido}
+
+El barrido completo del híbrido (best-of-5 por $N$) queda pendiente y está cableado
+en \texttt{scripts/sweep.sh}; estas cifras son de corridas individuales de control
+en $4096^2$, bordes acotados, y bastan para mostrar el régimen. La fase de
+calibración mide $R_{\mathrm{cpu}}\approx0{,}12$~Gcél/s (12 hilos) y
+$R_{\mathrm{gpu}}\approx25$~Gcél/s, es decir, la GPU es $\sim$210$\times$ la CPU. Por
+la Ecuación~\ref{eq:dlt-split} el reparto óptimo asigna
+$\mathrm{part}_{\mathrm{gpu}}\approx99{,}5\%$ a la GPU ---unas $18$ de $4096$ filas a
+la CPU. Con ese reparto el híbrido rinde $\sim$17~Gcél/s, frente a $\sim$25~Gcél/s de
+la GPU pura: \emph{no} la supera. La razón es exactamente la que anticipa la
+\S11.3: cuando un nodo domina por dos órdenes de magnitud, la porción que la CPU
+descarga ($\sim$0{,}5\%) es menor que el costo fijo de coordinar cada paso
+(intercambio de fantasmas y despertar el \emph{pool} para tan pocas filas) ---el
+término de sobrecarga constante del modelo afín. Verificado el camino degenerado
+(\texttt{--cpu-frac 0}) el híbrido iguala a CUDA puro ($\sim$25,6 vs $25$~Gcél/s),
+lo que confirma que la pérdida proviene de involucrar a la CPU, no de un defecto
+estructural. El mecanismo es general: cuanto más cercanos sean
+$R_{\mathrm{cpu}}$ y $R_{\mathrm{gpu}}$ ---por ejemplo con una ruta de CPU
+vectorizada (AVX2), o en grillas pequeñas donde la GPU pierde eficiencia por la
+sobrecarga de lanzamiento--- más se acerca el híbrido a la cota DLT
+$R_{\mathrm{cpu}}+R_{\mathrm{gpu}}$. Cuantificar ese cruce a lo largo de $N$ es el
+objetivo del barrido pendiente.
 
 \section{Análisis de resultados}
 \label{sec:analisis}

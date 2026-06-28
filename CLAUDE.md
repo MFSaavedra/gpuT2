@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 University assignment (Tarea 2, course CC7515-1 "Computación en GPU", U. de Chile): implement
 Conway's Game of Life three times — sequential **CPU**, **CUDA**, and **OpenCL** — then benchmark
-cells-evaluated-per-second across grid sizes and report the GPU speed-up vs CPU.
+cells-evaluated-per-second across grid sizes and report the GPU speed-up vs CPU. This branch
+(`static_load_balancing`) adds a fourth, **hybrid CPU+GPU** backend that splits the board with **static
+load balancing** (Divisible Load Theory, Barlas §11.3) — see the `HybridEngine` bullet below.
 
 This branch (`cuda_gl_interop`) adds **Tarea 3** (option 1, "Interop – Shaders"): a real-time **Qt +
 OpenGL viewer** (`gol_gui`) for the same simulation, using **CUDA↔OpenGL interop** so the GPU-computed
@@ -62,6 +64,26 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   `--engine opencl --verify` and a `gol_opencl_tests` gtest (see Tests). Opt-in via `-DBUILD_OPENCL=ON`; on an
   NVIDIA box the platform is "NVIDIA CUDA", so it lowers through the same PTX/SASS backend as CUDA.
 
+- **HybridEngine** (`ISimEngine`) — implemented (this branch, `static_load_balancing`). Runs the **CPU
+  and a GPU together on one board**, split by rows via **static load balancing / Divisible Load Theory**
+  (Barlas §11.3). Row-wise domain decomposition: the CPU owns rows `[0,s)` (host buffers + the same
+  persistent `std::barrier` worker pool as `CpuEngine`), the GPU owns `[s,R)` (device buffers); each side
+  keeps its slice resident and ping-pongs locally, and the full board is reassembled only on
+  `download()`. Each generation they compute **concurrently** and exchange a **one-row ghost halo** at the
+  seam (and, under `--wrap`, the far edges) — the only per-step host↔device traffic. A dedicated
+  **halo kernel** (`lifeHalo` in `kernel.cu`, `life_halo` in `kernel.cl`) reads vertical neighbours from
+  ghost rows and applies only the horizontal edge rule, so it is **bit-for-bit identical to the
+  `CpuEngine` oracle in both edge modes**. The split `s` is chosen **once** — from `--cpu-frac F`
+  (an offline cost-model value) or, by default, a short **a-priori calibration phase** that times a few
+  CPU-only and GPU-only steps and picks the DLT optimum `part_gpu = R_gpu/(R_cpu+R_gpu)` — then **frozen**
+  for the whole run. The GPU side is abstracted behind `IHaloPartition` (CUDA/OpenCL impls in the gated
+  libs, selected by `--gpu-backend`); the hybrid uses the **global-memory** halo kernel only (`--shared`
+  is not applied to it). Opt-in: built whenever a GPU backend is configured. Verified via
+  `--engine hybrid --verify` and a `gol_hybrid_tests` gtest. **Finding:** on this box the GPU is ~200×
+  the CPU, so the DLT-optimal split is ~99.5% GPU and the per-step coordination overhead (ghost exchange
+  + pool wakeup for a tiny CPU share) slightly exceeds the gain — the hybrid ≈ pure GPU here, the
+  textbook DLT regime where one node dominates.
+
 - **Benchmarks** — run. `scripts/sweep.sh` drives the CPU(threads) + CUDA + OpenCL (block×shared/local)
   sweeps; on the Linux box they go to `results/linux/sweep_{gpu_opt,scaling}.csv`, and
   `analysis/results.ipynb` (Spanish, reads `results/linux/`) plots them to `report/img/bench_*.png`.
@@ -108,11 +130,12 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   Intel iGPU, on which interop is unavailable (it falls back to host-upload); `scripts/run_gui.sh` sets
   PRIME-offload env vars so the GL context lands on the NVIDIA GPU and the zero-copy path is used.
 
-All three backends now run and verify against the `CpuEngine` reference oracle. GPU CMake targets are
-opt-in and double-gated (the option **and** the source must exist); the project still builds and runs
-(CPU + text) with neither toolkit present. The chosen optimization options to benchmark are **#1 block
-size** and **#3 shared/local memory** (the `--block` / `--shared` knobs); option #2 (2D vs 1D arrays)
-is not used — the `Grid` is flat 1-D.
+All three backends (plus the hybrid) now run and verify against the `CpuEngine` reference oracle. GPU
+CMake targets are opt-in and double-gated (the option **and** the source must exist); the project still
+builds and runs (CPU + text) with neither toolkit present, in which case `--engine hybrid` reports the
+backend as unavailable. The chosen optimization options to benchmark are **#1 block size** and **#3
+shared/local memory** (the `--block` / `--shared` knobs); option #2 (2D vs 1D arrays) is not used — the
+`Grid` is flat 1-D.
 
 ## Build & test
 
@@ -162,11 +185,16 @@ GoogleTest is found via `find_package(GTest CONFIG)` if installed system-wide; o
 
 Strategy pattern. A backend-agnostic core (`Grid`, `Config`, patterns) plus two swappable interfaces —
 `ISimEngine` (the only thing that genuinely differs per backend) and `IRenderer` (output). The
-application owns the loop and wires a chosen engine + renderer at runtime:
+`HybridEngine` is itself an `ISimEngine` that *composes* a CPU slice with a GPU slice behind a third,
+internal strategy interface, `IHaloPartition` (CUDA/OpenCL impls in the gated libs) — so the hybrid
+stays free of any toolkit headers and selects the device at runtime. The application owns the loop and
+wires a chosen engine + renderer at runtime:
 
 ```
 gol (headless app: main loop, Config/CLI)
-  |-- ISimEngine   <- CpuEngine | CudaEngine | OpenCLEngine
+  |-- ISimEngine   <- CpuEngine | CudaEngine | OpenCLEngine | HybridEngine
+  |                     '-- HybridEngine drives a CPU slice + an IHaloPartition
+  |                         (<- CudaHaloPartition | OpenCLHaloPartition) GPU slice
   |-- IRenderer    <- NullRenderer | TextRenderer | AnsiRenderer
   '-- Grid + Patterns (shared, backend-agnostic)
 
@@ -212,9 +240,15 @@ against `LifeRules.hpp`. Don't chase zero duplication between CUDA and OpenCL �
 than it saves. Edge handling (bounded vs toroidal) must also be identical across backends. **Default is
 bounded** (out-of-range neighbours count as dead); `--wrap` selects toroidal. `CpuEngine` implements
 both, the seq-vs-parallel test covers each mode, and the GPU backends must match it bit-for-bit in both.
+The `HybridEngine` realises edges differently: its halo kernel never does vertical edge logic — the host
+fills each slice's ghost rows per edge mode (bounded → dead/zero far ghosts; toroidal → wrap onto the
+other slice) — while the horizontal edge rule stays in-kernel. Same `nextState`/`next_state`, same
+result, both modes.
 
 CMake: a core library (always), a CPU engine (always), CUDA/OpenCL engine libraries gated on
-`BUILD_CUDA` / `BUILD_OPENCL`, and renderer sources. The project must build and run (CPU + text) with
+`BUILD_CUDA` / `BUILD_OPENCL`, a hybrid engine library (`gol_hybrid`) gated on *at least one* GPU
+backend being configured (it links whichever of `gol_cuda` / `gol_opencl` exists and is compiled by the
+host C++ compiler, not nvcc), and renderer sources. The project must build and run (CPU + text) with
 no CUDA toolkit and no OpenCL present. The `gol_gui` executable is gated on `BUILD_GUI` (finds Qt5 or Qt6); it
 always links the CPU engine, and when `BUILD_CUDA` is also on it builds the `gol_cudagl` interop bridge
 (nvcc), links the CUDA engine, and defines `GOL_HAVE_CUDA`.
@@ -228,14 +262,16 @@ include/gol/   Grid.hpp ISimEngine.hpp IRenderer.hpp Config.hpp LifeRules.hpp Ti
                patterns/Pattern.hpp patterns/RleLoader.hpp
 src/core/      Config.cpp main.cpp                         (Grid/LifeRules/Timer are header-only)
 src/engines/   cpu/CpuEngine.cpp  cuda/CudaEngine.cu cuda/kernel.cu  opencl/OpenCLEngine.cpp opencl/kernel.cl
+               hybrid/HybridEngine.cpp  cuda/CudaHaloPartition.cu  opencl/OpenCLHaloPartition.cpp
 include/gol/engines/  CudaEngine.hpp  cuda/kernel.cuh  OpenCLEngine.hpp
+               IHaloPartition.hpp  HybridEngine.hpp  cuda/CudaHaloPartition.hpp  opencl/OpenCLHaloPartition.hpp
 src/render/    TextRenderer.cpp AnsiRenderer.cpp           (NullRenderer is header-only)
                CudaGlInterop.cu                            (CUDA<->GL bridge, nvcc; gol_cudagl lib)
 src/gui/       main_gui.cpp GolGlWidget.cpp MainWindow.cpp shaders/display.vert shaders/display.frag
 src/patterns/  Pattern.cpp RleLoader.cpp
-tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp cuda_equivalence_test.cpp opencl_equivalence_test.cpp
+tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp cuda_equivalence_test.cpp opencl_equivalence_test.cpp hybrid_equivalence_test.cpp
 patterns/      *.rle                                       (block, blinker, birth_on_six, glider, acorn, r_pentomino, highlife_replicator, highlife_spaceship, highlife_c98_gun)
-scripts/       sweep.sh sweep_gpu_opt.ps1 sweep_scaling.ps1 (CPU+CUDA+OpenCL sweeps; .ps1 are the Windows variants)
+scripts/       sweep.sh sweep_gpu_opt.ps1 sweep_scaling.ps1 (CPU+CUDA+OpenCL+hybrid sweeps; .ps1 are the Windows variants)
                run_gui.sh                                  (launch gol_gui on the NVIDIA GPU for zero-copy interop)
 results/       sweep_gpu_opt.csv sweep_scaling.csv          (Windows baseline, BOM); linux/ holds the Linux re-run
 analysis/      results.ipynb                               (loads results/linux/, writes report/img/bench_*.png)
@@ -262,6 +298,9 @@ separately from host<->device transfers:
 - CPU: `std::chrono`.
 - CUDA: `cudaEvent_t` around the kernel launch.
 - OpenCL: command-queue events with `CL_QUEUE_PROFILING_ENABLE`.
+- Hybrid: `std::chrono` around the whole concurrent step (the CPU slice and GPU kernel run together, so
+  the relevant figure is the wall of the parallel region ≈ max of the two nodes, not either alone). The
+  calibration phase runs in `upload()`, so it lands in the upload time, never in the cells/sec metric.
 
 Deep-dive on the *best* parallel solution only:
 
@@ -295,6 +334,14 @@ In dependency order (`CpuEngine` is the oracle, so it is verified first):
    only when the matching engine was configured — `gol_cuda_tests` under `-DBUILD_CUDA=ON`,
    `gol_opencl_tests` under `-DBUILD_OPENCL=ON` — and each needs its GPU/OpenCL device at run time.
 
+5. **Hybrid equivalence** — done. `hybrid_equivalence_test.cpp` asserts the `HybridEngine` matches the
+   `CpuEngine` oracle bit-for-bit across CPU fractions {0, 0.25, 0.5, 0.75, 1} (the 0 and 1 ends exercise
+   the degenerate pure-GPU / pure-CPU paths), an auto-calibrated split, sequential vs parallel CPU
+   slices, and both edge modes, on a non-divisible grid (so the split lands mid-block). It also covers a
+   birth-on-6 case straddling the seam, the no-step round-trip, and reuse across sizes — for every GPU
+   backend compiled in. Built as `gol_hybrid_tests` whenever the hybrid engine is configured; needs a
+   GPU/OpenCL device at run time.
+
 **Golly as an external oracle.** Golly is installed locally, including the headless `bgolly` runner
 (infinite grid, no edge effects). It runs our exact rule (`B36/S23`), so it is a second, independent
 reference: `bgolly -m <gens> -i <step> file.rle` prints populations to compare against ours. The
@@ -304,15 +351,19 @@ reproduce `bgolly` bit-for-bit, so they make good large-grid cross-checks for th
 ## Report
 
 LaTeX sources are in `report/`, built from a vendored template (`report/src/`, `report/template.tex`).
-There are **two** standalone documents, both built the same way:
+There are **three** standalone documents, all built the same way:
 
 - `report/main.tex` — the **graded assignment report** (Spanish). Full section skeleton with the
   grading rubric noted in comments; holds experiments, results, speed-up analysis.
 - `report/manual.tex` — the **developer manual** (English). Architecture, mechanism, and a
   line-by-line code walkthrough; the reference for how/why the code works.
+- `report/hybrid_report.tex` — a standalone **engineering report** (English) analysing the hybrid
+  CPU+GPU static-load-balancing sweep: throughput results, the DLT split, the key finding that the
+  apparent large-N "win" is the branch-free halo kernel (not load balancing), and the OpenCL ICD /
+  GPU-variance caveats. Embeds `report/img/hybrid_load_balancing.png`.
 
 ```bash
-cd report && latexmk -pdf main.tex      # or: latexmk -pdf manual.tex
+cd report && latexmk -pdf main.tex      # or: latexmk -pdf manual.tex, latexmk -pdf hybrid_report.tex
 ```
 
 **Architecture UML.** The class diagram source is `report/diagrams/architecture.mmd` (Mermaid),

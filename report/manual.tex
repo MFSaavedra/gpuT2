@@ -169,7 +169,9 @@ runtime from the parsed configuration.
 
 \begin{sourcecode}{plaintext}{The strategy layout of the headless app.}
 Application (main.cpp)  -- owns the loop + Config/CLI
-  |-- ISimEngine   <- CpuEngine | CudaEngine | OpenCLEngine
+  |-- ISimEngine   <- CpuEngine | CudaEngine | OpenCLEngine | HybridEngine
+  |                     '-- HybridEngine = CPU slice + IHaloPartition GPU slice
+  |                         (<- CudaHaloPartition | OpenCLHaloPartition)
   |-- IRenderer    <- NullRenderer | TextRenderer | AnsiRenderer
   '-- Grid + Pattern  (shared, backend-agnostic state & seed data)
 \end{sourcecode}
@@ -187,9 +189,10 @@ single host-side harness drive all three engines. The link graph is:
 gol_core  (Grid, Config+CLI, patterns, RLE, interfaces)
    |-- gol_cpu     (CpuEngine; links Threads::Threads)
    |-- gol_render  (TextRenderer, AnsiRenderer)
-   |-- gol_cuda    (CudaEngine; opt-in, -DBUILD_CUDA=ON)
-   '-- gol_opencl  (OpenCLEngine; opt-in, -DBUILD_OPENCL=ON)
-gol  executable  =  gol_core + gol_cpu + gol_render (+ gol_cuda / gol_opencl when built)
+   |-- gol_cuda    (CudaEngine, CudaHaloPartition; opt-in, -DBUILD_CUDA=ON)
+   |-- gol_opencl  (OpenCLEngine, OpenCLHaloPartition; opt-in, -DBUILD_OPENCL=ON)
+   '-- gol_hybrid  (HybridEngine; built when >=1 GPU backend is configured)
+gol  executable  =  gol_core + gol_cpu + gol_render (+ gol_cuda / gol_opencl / gol_hybrid when built)
 \end{sourcecode}
 
 The UML class diagram in Figure \ref{fig:uml} renders these relationships
@@ -201,12 +204,16 @@ every backend and renderer is a realization behind them, and the shared
 project (generated from \texttt{report/diagrams/architecture.mmd} with
 mermaid-cli). The \texttt{Application} owns one \texttt{ISimEngine} and one
 \texttt{IRenderer} --- the two strategy interfaces. \texttt{CpuEngine},
-\texttt{CudaEngine} and \texttt{OpenCLEngine} realize \texttt{ISimEngine}.
-\texttt{NullRenderer}, \texttt{TextRenderer} and \texttt{AnsiRenderer} realize
-\texttt{IRenderer}. Dashed arrows are dependencies: \texttt{CpuEngine} and
-\texttt{CudaEngine} use \texttt{LifeRules::nextState} directly, while
-\texttt{OpenCLEngine} mirrors that rule in \texttt{kernel.cl} (read at runtime);
-\texttt{RleLoader} produces a \texttt{Pattern} that stamps a \texttt{Grid}.
+\texttt{CudaEngine}, \texttt{OpenCLEngine} and \texttt{HybridEngine} realize
+\texttt{ISimEngine}. \texttt{HybridEngine} additionally owns an
+\texttt{IHaloPartition} (realized by \texttt{CudaHaloPartition} /
+\texttt{OpenCLHaloPartition}) for its GPU slice, and uses \texttt{LifeRules} for
+its CPU slice. \texttt{NullRenderer}, \texttt{TextRenderer} and
+\texttt{AnsiRenderer} realize \texttt{IRenderer}. Dashed arrows are dependencies:
+\texttt{CpuEngine} and \texttt{CudaEngine} use \texttt{LifeRules::nextState}
+directly, while \texttt{OpenCLEngine} mirrors that rule in \texttt{kernel.cl}
+(read at runtime); \texttt{RleLoader} produces a \texttt{Pattern} that stamps a
+\texttt{Grid}.
 \label{fig:uml}}
 
 Table \ref{tab:files} is the file map. Header-only units carry no \texttt{.cpp}
@@ -231,6 +238,10 @@ and impose no link dependency.
 		\texttt{include/gol/engines/CudaEngine.hpp} & CUDA engine declaration & \ref{sec:cuda} \\
 		\texttt{include/gol/engines/cuda/kernel.cuh} & CUDA launcher declaration & \ref{sec:cuda} \\
 		\texttt{include/gol/engines/OpenCLEngine.hpp} & OpenCL engine declaration & \ref{sec:opencl} \\
+		\texttt{include/gol/engines/IHaloPartition.hpp} & GPU partition strategy iface (HO) & \ref{sec:hybrid} \\
+		\texttt{include/gol/engines/HybridEngine.hpp} & Hybrid engine declaration & \ref{sec:hybrid} \\
+		\texttt{include/gol/engines/cuda/CudaHaloPartition.hpp} & CUDA partition factory (HO) & \ref{sec:hybrid} \\
+		\texttt{include/gol/engines/opencl/OpenCLHaloPartition.hpp} & OpenCL partition factory (HO) & \ref{sec:hybrid} \\
 		\texttt{include/gol/render/NullRenderer.hpp} & No-op renderer (HO) & \ref{sec:render} \\
 		\texttt{include/gol/render/TextRenderer.hpp} & Text renderer declaration & \ref{sec:render} \\
 		\texttt{include/gol/render/AnsiRenderer.hpp} & In-place ANSI renderer decl. & \ref{sec:render} \\
@@ -242,7 +253,10 @@ and impose no link dependency.
 		\texttt{src/engines/cuda/CudaEngine.cu}  & CUDA engine implementation & \ref{sec:cuda} \\
 		\texttt{src/engines/cuda/kernel.cu}      & CUDA step kernels & \ref{sec:cuda} \\
 		\texttt{src/engines/opencl/OpenCLEngine.cpp} & OpenCL engine implementation & \ref{sec:opencl} \\
-		\texttt{src/engines/opencl/kernel.cl}    & OpenCL kernels (read at runtime) & \ref{sec:opencl} \\
+		\texttt{src/engines/opencl/kernel.cl}    & OpenCL kernels (incl.\ \texttt{life\_halo}) & \ref{sec:opencl} \\
+		\texttt{src/engines/hybrid/HybridEngine.cpp} & Hybrid engine + load balancing & \ref{sec:hybrid} \\
+		\texttt{src/engines/cuda/CudaHaloPartition.cu} & CUDA halo partition impl & \ref{sec:hybrid} \\
+		\texttt{src/engines/opencl/OpenCLHaloPartition.cpp} & OpenCL halo partition impl & \ref{sec:hybrid} \\
 		\texttt{src/patterns/RleLoader.cpp}      & RLE decoding & \ref{sec:patterns} \\
 		\texttt{src/patterns/Pattern.cpp}        & Stamping a pattern onto a grid & \ref{sec:patterns} \\
 		\texttt{src/render/TextRenderer.cpp}     & ASCII frame dump & \ref{sec:render} \\
@@ -537,9 +551,11 @@ Config parse(int argc, char** argv) {
       if (v == "cpu") cfg.engine = EngineKind::Cpu;
       else if (v == "cuda") cfg.engine = EngineKind::Cuda;
       else if (v == "opencl") cfg.engine = EngineKind::OpenCL;
+      else if (v == "hybrid") cfg.engine = EngineKind::Hybrid;
       else { std::cerr << "error: unknown engine '" << v << "'\n"; usageAndExit(2); }
     }
     // ... --cols --gens --threads --seed --renderer --block --shared ...
+    // ... hybrid knobs: --cpu-frac --gpu-backend --calib-steps ...
     else { std::cerr << "error: unknown option '" << arg << "'\n"; usageAndExit(2); }
   }
   return cfg;
@@ -549,7 +565,10 @@ Config parse(int argc, char** argv) {
 Each value-taking branch uses the idiom \texttt{toULL(nextValue(...))}, which
 consumes and parses in one expression. \texttt{--wrap}, \texttt{--shared} are
 value-less booleans. \texttt{--block}/\texttt{--shared} are accepted even in a
-CPU-only build --- that is the union-flag-surface point in code.
+CPU-only build --- that is the union-flag-surface point in code. The hybrid adds
+three more knobs in the same style: \texttt{--cpu-frac F} (a \texttt{double};
+stored as a \texttt{std::optional}, so ``unset'' means calibrate),
+\texttt{--gpu-backend auto|cuda|opencl}, and \texttt{--calib-steps N}.
 
 \paragraph{What can go wrong.} Missing value, non-numeric value, unknown flag,
 and unknown engine/renderer name are all caught. One unguarded edge: a negative
@@ -648,12 +667,10 @@ yielding \texttt{inf}/NaN.
 
 The whole body runs inside a \texttt{try/catch} so that, e.g., a missing RLE file
 (which throws in the loader) is reported cleanly on \texttt{stderr} with exit
-code 1. The engine itself comes from a \texttt{makeEngine} factory that maps the
-configured \texttt{EngineKind} to a concrete backend; it returns \texttt{nullptr}
-only when the requested backend was \emph{not compiled into this build} (e.g.
-\texttt{--engine cuda} without \texttt{-DBUILD\_CUDA=ON}), in which case
-\texttt{main} prints \emph{``the requested engine is not available in this build''}
-and exits~1.
+code 1. The engine factory returns \texttt{nullptr} for any backend not compiled
+into this build, and a guard before the loop turns that into a clean error ---
+e.g.\ requesting \texttt{--engine cuda}, \texttt{opencl}, or \texttt{hybrid} in a
+CPU-only build prints the rebuild hint and exits 1 rather than crashing.
 
 \section{The CPU engine --- \texttt{CpuEngine.cpp}}
 \label{sec:cpu}
@@ -1113,6 +1130,147 @@ than the GPU's $\sim$25--30\% run-to-run boost-clock variance (Section
 (\texttt{-DBUILD\_OPENCL=ON}) and verified bit-for-bit against the
 \texttt{CpuEngine} oracle, both at runtime (\texttt{--engine opencl --verify}) and in
 \texttt{gol\_opencl\_tests}.
+
+\section{The hybrid engine --- \texttt{HybridEngine.cpp} and the halo partitions}
+\label{sec:hybrid}
+
+\texttt{HybridEngine} runs the \emph{CPU and a GPU on the same board at the same
+time}, splitting the work by rows. It is an \texttt{ISimEngine} like any other
+backend, but internally it is two engines glued at a seam, with the split chosen
+by \textbf{static load balancing} following the divisible-load-theory (DLT)
+approach of Barlas, \emph{Multicore and GPU Programming} (2e), \S11.3.
+
+\subsection{Why row-wise, and why ghosts}
+The Game of Life step is a 9-point stencil: a cell's next state depends on its
+eight neighbours. If we cut the board into a top block for the CPU (rows
+$[0,s)$) and a bottom block for the GPU (rows $[s,R)$), the two blocks are
+\emph{almost} independent --- they interact only across the cut, where each side
+needs one row of the other's current state to update its boundary row. This is
+exactly the ``extra rows of pixels'' that \S11.3 attaches to the image-convolution
+example, and it is what makes the load \emph{divisible}: the per-generation
+communication is a single row each way, independent of how many rows each side
+owns.
+
+We give each block a one-row \textbf{ghost} (halo) above and below its real rows,
+so a block that owns \texttt{realRows} rows holds a buffer of height
+\texttt{realRows + 2}:
+
+\begin{sourcecode}{plaintext}{Per-block buffer layout (height realRows+2).}
+  row 0            <- TOP ghost     (filled from the neighbour each step)
+  rows [1,realRows]   real rows     (board row = bufferRow - 1, within the block)
+  row realRows+1   <- BOTTOM ghost  (filled from the neighbour each step)
+\end{sourcecode}
+
+\noindent The CPU keeps its block in host buffers; the GPU keeps its block in
+device buffers. Each side ping-pongs \emph{locally} across generations, and the
+full board is reassembled only on \texttt{download()}. So the bulk slice never
+crosses the PCIe bus during the run --- only the ghost rows do.
+
+\subsection{The halo kernel: vertical edges leave the kernel}
+The existing \texttt{lifeGlobal}\,/\,\texttt{life\_global} kernels fold both the
+vertical and horizontal edge rules into one \texttt{wrap} flag, which is wrong for
+a sub-block: at the seam the ``edge'' is not a board boundary but the neighbour's
+data. The hybrid therefore uses a dedicated kernel --- \texttt{lifeHalo} in
+\texttt{kernel.cu}, \texttt{life\_halo} in \texttt{kernel.cl} --- that
+\textbf{reads vertical neighbours straight from the ghost rows} (no vertical edge
+logic at all) and applies only the \emph{horizontal} (column) edge rule. The host
+fills the ghosts to realise whichever board edge mode is in force:
+
+\begin{itemize}
+  \item \textbf{Seam} (always): the CPU's last real row $\to$ the GPU's top ghost,
+        and the GPU's first real row $\to$ the CPU's bottom ghost.
+  \item \textbf{Far edges, bounded:} the outermost ghosts stay zero (dead). Both
+        device/host buffers are zeroed once at upload and the kernel never writes
+        ghost rows, so this costs nothing per step.
+  \item \textbf{Far edges, toroidal} (\texttt{--wrap}): the board's top wraps to
+        its bottom, so the CPU's first row and the GPU's last row are exchanged
+        into the opposite far ghosts (a host bounce of one row each).
+\end{itemize}
+
+\noindent Because the only difference between the two edge modes is \emph{which
+rows the host copies into the ghosts}, one kernel serves both, and the result is
+bit-for-bit identical to the \texttt{CpuEngine} oracle in each. The CPU half uses
+the same idea in plain C\texttt{++}: \texttt{computeCpuRows} reads its vertical
+neighbours from the buffer (ghosts included) and handles columns per \texttt{wrap},
+reusing \texttt{LifeRules::nextState} unchanged.
+
+\subsection{Choosing the split: a cost model and a calibration phase}
+DLT models each node's time as affine in its share. Ignoring the (tiny) per-step
+communication, node $i$ that owns a fraction $\text{part}_i$ of the $L$ cells
+finishes in $t_i \approx \text{part}_i\,L / R_i$, where $R_i$ is its throughput in
+cells/s. The optimum --- the one \S11.3 proves minimises the makespan --- is the
+partition where \emph{all nodes finish together}; for two nodes that gives
+
+\[
+  \text{part}_{\text{gpu}} = \frac{R_{\text{gpu}}}{R_{\text{cpu}}+R_{\text{gpu}}},
+  \qquad
+  \text{part}_{\text{cpu}} = \frac{R_{\text{cpu}}}{R_{\text{cpu}}+R_{\text{gpu}}},
+\]
+
+\noindent which we round to a row split $s = \mathrm{round}(\text{part}_{\text{cpu}}\,R)$.
+The throughputs come from one of two places, both ``static'' in the sense that the
+split is decided once and then frozen for the whole run:
+
+\begin{itemize}
+  \item \textbf{\texttt{--cpu-frac F}} sets $\text{part}_{\text{cpu}}=F$ directly ---
+        an offline cost-model value the user supplies (and what the equivalence
+        test sweeps, including the degenerate $F{=}0$ pure-GPU and $F{=}1$
+        pure-CPU ends).
+  \item \textbf{Calibration (default)} is the a-priori ``initialization phase'' of
+        the two-phase scheme in \S11.3: in \texttt{upload()} the engine times
+        \texttt{--calib-steps} CPU-only and GPU-only steps on the actual grid,
+        derives $R_{\text{cpu}}$ and $R_{\text{gpu}}$, and computes the split. The
+        ghost contents do not affect compute cost, so the calibration loops run
+        with zero ghosts. Calibration lives in \texttt{upload()}, so its cost lands
+        in the upload time and never enters the cells/s metric.
+\end{itemize}
+
+\subsection{The concurrent step}
+The whole point is overlap, so \texttt{step()} is ordered to keep the CPU and GPU
+busy at once:
+
+\begin{sourcecode}{plaintext}{One hybrid generation (overlap in the middle two lines).}
+exchangeGhosts();        // fill both sides' ghosts from the CURRENT buffers
+partition->launchStep(); // enqueue the GPU halo kernel, ASYNC (returns at once)
+runCpuParallel(...);     // compute the CPU rows on the worker pool, CONCURRENTLY
+partition->finishStep(); // wait for the GPU kernel, then swap its device buffers
+swap(cpuCur, cpuNxt);    // swap the CPU buffers
+\end{sourcecode}
+
+\noindent The CPU half reuses \texttt{CpuEngine}'s persistent \texttt{std::barrier}
+worker pool verbatim (Section \ref{sec:cpu}), so thread-creation never enters the
+loop. \texttt{lastKernelMillis()} reports the wall time of this concurrent region,
+i.e.\ roughly the \emph{maximum} of the two nodes' times --- which is what the
+optimum equalises. For OpenCL, \texttt{launchStep} issues a \texttt{clFlush} after
+enqueuing so the in-order queue actually starts the kernel on the device while the
+host computes, rather than deferring it to the \texttt{finishStep} wait.
+
+\subsection{The \texttt{IHaloPartition} abstraction}
+\texttt{HybridEngine} is compiled by the host C\texttt{++} compiler and must not
+pull in a GPU toolkit, yet it has to drive either CUDA or OpenCL. The GPU half
+therefore sits behind a small strategy interface, \texttt{IHaloPartition}
+(\texttt{uploadRegion}, \texttt{setTopGhost}/\texttt{setBottomGhost},
+\texttt{launchStep}/\texttt{finishStep}, \texttt{readTopRow}/\texttt{readBottomRow},
+\texttt{downloadRegion}). The concrete \texttt{CudaHaloPartition} (in
+\texttt{gol\_cuda}) and \texttt{OpenCLHaloPartition} (in \texttt{gol\_opencl}) are
+created through opaque factory functions, so the only thing crossing into
+\texttt{HybridEngine.cpp} is a \texttt{std::unique\_ptr<IHaloPartition>}.
+\texttt{--gpu-backend} picks between them at runtime; \texttt{gol\_hybrid} is built
+whenever at least one GPU backend is configured. The hybrid uses the
+\emph{global-memory} halo kernel only --- the shared/local-memory option is studied
+on the pure GPU engines (Section \ref{sec:cuda}) and is not applied here.
+
+\subsection{What the split tells you}
+On a machine where one node vastly out-runs the other, the optimum assigns almost
+everything to the fast node. On the test box the GPU is roughly two hundred times
+the CPU's throughput, so calibration picks $\text{part}_{\text{gpu}}\approx99.5\%$
+and the CPU is left with a handful of rows. There the hybrid's per-step
+coordination (the ghost exchange and waking the worker pool for a tiny share) can
+cost more than the sliver of work the CPU absorbs, so the hybrid lands at
+\emph{about} the pure-GPU rate rather than beating it --- the regime \S11.3
+describes when a node is too slow to be worth a share. The mechanism is general,
+though: the closer the two throughputs, the more the hybrid wins, up to the DLT
+ceiling $R_{\text{cpu}}+R_{\text{gpu}}$.
 
 \section{The pattern pipeline --- \texttt{RleLoader.cpp} and \texttt{Pattern.cpp}}
 \label{sec:patterns}
@@ -1761,20 +1919,27 @@ endif()
 \end{sourcecode}
 
 Each GPU backend is \textbf{double-gated}: an \texttt{option(... OFF)}
-\emph{and} an \texttt{if(EXISTS <source>)} check. The \texttt{EXISTS} guard means
-a configure with \texttt{-DBUILD\_CUDA=ON} never hard-fails: if the \texttt{.cu}
-sources were absent it would emit a warning and skip the target rather than
-erroring. With the sources present (as now) it enables the CUDA language and
-builds \texttt{gol\_cuda}, wiring it into \texttt{gol} with the
-\texttt{GOL\_HAVE\_CUDA} definition. The OpenCL target follows the identical
-pattern. \texttt{find\_package(Threads REQUIRED)} is what makes
-\texttt{std::thread}/\texttt{std::barrier} link on the CPU engine.
+\emph{and} an \texttt{if(EXISTS <source>)} check, so passing
+\texttt{-DBUILD\_CUDA=ON} on a tree without the \texttt{.cu} source emits a warning
+and skips the target rather than failing configuration. Both sources now exist, so
+the flags build \texttt{gol\_cuda}\,/\,\texttt{gol\_opencl} (each also carrying its
+halo-partition source). The OpenCL target follows the identical pattern.
+\texttt{find\_package(Threads REQUIRED)} is what makes
+\texttt{std::thread}/\texttt{std::barrier} link on the CPU and hybrid engines.
+
+\paragraph{The hybrid library.} \texttt{gol\_hybrid} is gated on
+\texttt{GOL\_CUDA\_ENABLED OR GOL\_OPENCL\_ENABLED} --- it needs at least one GPU
+backend. It is a plain host-C\texttt{++} library that links whichever GPU libraries
+exist and receives a \texttt{GOL\_HAVE\_CUDA}\,/\,\texttt{GOL\_HAVE\_OPENCL} define
+for each, which \texttt{HybridEngine.cpp} uses to compile in the matching partition
+factory. The application links \texttt{gol\_hybrid} and gets
+\texttt{GOL\_HAVE\_HYBRID} so \texttt{main.cpp} exposes \texttt{--engine hybrid}.
 
 \begin{sourcecode}{bash}{Building and testing.}
 cmake -S . -B build                 # core + CPU + tests (GPU OFF by default)
 cmake --build build
 ctest --test-dir build --output-on-failure
-# GPU opt-in (CUDA/OpenCL toolkits required):
+# GPU opt-in (CUDA + OpenCL; also builds the hybrid engine):
 cmake -S . -B build -DBUILD_CUDA=ON -DBUILD_OPENCL=ON
 \end{sourcecode}
 
@@ -1827,8 +1992,21 @@ backends.} \texttt{cuda\_equivalence\_test.cpp} and
 sizes $\{32,64,128,256\}$, both kernels (global/shared) and both edge modes; each
 also checks the host\,$\leftrightarrow$\,device round-trip (\texttt{upload} then
 \texttt{download}, no \texttt{step}) and buffer reuse across grid sizes on one
-engine instance. An
-external oracle is also available: the headless \texttt{bgolly} runner simulates
+engine instance.
+
+\paragraph{The fifth test: hybrid equivalence.}
+\texttt{hybrid\_equivalence\_test.cpp} (built as \texttt{gol\_hybrid\_tests}
+whenever the hybrid is configured) holds the same bar against the more intricate
+seam logic. For every GPU backend compiled in, it asserts the
+\texttt{HybridEngine} matches the \texttt{CpuEngine} oracle bit-for-bit across CPU
+fractions $\{0,0.25,0.5,0.75,1\}$ --- the $0$ and $1$ ends exercise the degenerate
+pure-GPU and pure-CPU paths --- plus an auto-calibrated split and a single-thread
+CPU slice, in both edge modes, on a non-square $130\times127$ grid (so the split
+lands mid-block and stresses the ghost exchange and the pool's remainder logic). A
+\texttt{BirthOnSixAcrossSeam} case forces the live cluster to straddle the
+CPU/GPU boundary; the round-trip and reuse-across-sizes cases mirror the GPU tests.
+
+An external oracle is also available: the headless \texttt{bgolly} runner simulates
 \texttt{B36/S23} on an infinite grid, and the \texttt{highlife\_replicator.rle} /
 \texttt{highlife\_spaceship.rle} fixtures already reproduce it bit-for-bit, so
 they make good large-grid cross-checks for the GPU backends.
@@ -1914,12 +2092,15 @@ parallel in one path), both renderers, the RLE pipeline, the CLI, the
 \texttt{CudaEngine} (global + shared kernels, \texttt{--block}/\texttt{--shared},
 cudaEvent timing) and the \texttt{OpenCLEngine} (its
 \texttt{life\_global}/\texttt{life\_local} twin, runtime-loaded \texttt{kernel.cl},
-queue-event timing; Section \ref{sec:opencl}), and the CSV benchmark-output mode
+queue-event timing; Section \ref{sec:opencl}), the \texttt{HybridEngine}
+(CPU\,+\,GPU with static load balancing, ghost-row decomposition; Section
+\ref{sec:hybrid}), and the CSV benchmark-output mode
 (\texttt{--csv}/\texttt{--csv-header}). Test suites: CPU rules,
-sequential-vs-parallel, RLE loader, and the cross-backend equivalence of \emph{both}
-GPU engines against the CPU oracle (Sections \ref{sec:cuda}, \ref{sec:opencl}). The
+sequential-vs-parallel, RLE loader, the cross-backend equivalence of \emph{both}
+GPU engines against the CPU oracle, and the hybrid equivalence across splits and
+edge modes (Sections \ref{sec:cuda}, \ref{sec:opencl}, \ref{sec:hybrid}). The
 CPU engine is the reference oracle. The benchmark sweeps (\texttt{scripts/sweep.sh},
-now CPU + CUDA + OpenCL), the results CSVs, the analysis notebook
+now CPU + CUDA + OpenCL + hybrid), the results CSVs, the analysis notebook
 (\texttt{analysis/results.ipynb}), and the Nsight (\texttt{ncu}/\texttt{nsys})
 profiling of the best CUDA kernel are also done and populate \texttt{main.tex}.
 The interactive \textbf{Qt\,+\,OpenGL viewer} (\texttt{gol\_gui}) is also done
@@ -1927,16 +2108,18 @@ The interactive \textbf{Qt\,+\,OpenGL viewer} (\texttt{gol\_gui}) is also done
 host-upload fallback, the CPU engine supported with no CUDA toolkit, live
 paint/zoom/pan, RLE loading, and reset.
 
-\paragraph{Pending / future work.} All three backends are implemented, verified
-against the CPU oracle (including \texttt{gol\_opencl\_tests}) and benchmarked --- the
-OpenCL results are folded into the report alongside CUDA. The interactive viewer
-realizes what used to be the ``planned \texttt{GuiRenderer}'', though as a separate
-front-end rather than an \texttt{IRenderer} (Section~\ref{sec:gui} explains why). What
-is left is optional: shader-side visualisation extensions (age/heat colouring, a
-population plot, a 3-D height field via a geometry shader), and the performance ideas
-the report raises (a vectorised AVX2 CPU path; more instruction-level parallelism per
-GPU thread to hide load latency). Nsight Compute profiles only CUDA, so OpenCL relies
-on its in-program queue-event timing.
+\paragraph{Pending / future work.} All four backends are implemented and verified
+against the CPU oracle (including \texttt{gol\_hybrid\_tests} and
+\texttt{gol\_opencl\_tests}); the three GPU/CPU backends are benchmarked and folded
+into the report, and the hybrid sweep is wired into \texttt{sweep.sh} ready to run.
+The interactive Qt\,+\,OpenGL viewer realizes what used to be the ``planned
+\texttt{GuiRenderer}'', though as a separate front-end rather than an
+\texttt{IRenderer} (Section~\ref{sec:gui} explains why). What is left is optional:
+running and plotting the hybrid sweep, and the performance ideas the report raises (a
+vectorised AVX2 CPU path --- which would also raise $R_{\text{cpu}}$ and move the
+hybrid out of the GPU-dominant regime; more instruction-level parallelism per GPU
+thread to hide load latency). Nsight Compute profiles only CUDA, so OpenCL and the
+hybrid rely on in-program queue-event timing.
 
 \paragraph{How a GPU backend slots in.} Implement \texttt{ISimEngine}: own two
 device buffers, \texttt{upload} once, ping-pong on the device inside

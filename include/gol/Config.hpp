@@ -19,9 +19,10 @@ namespace gol {
  * configuration.
  */
 enum class EngineKind {
-  Cpu,   ///< CpuEngine (sequential or data-parallel).
-  Cuda,  ///< CudaEngine
-  OpenCL ///< OpenCLEngine
+  Cpu,    ///< CpuEngine (sequential or data-parallel).
+  Cuda,   ///< CudaEngine
+  OpenCL, ///< OpenCLEngine
+  Hybrid  ///< HybridEngine (CPU + GPU, static load balancing)
 };
 
 /**
@@ -84,6 +85,21 @@ struct Config {
   bool csvHeader = false; ///< Print the CSV header line and exit (for sweep scripts).
   bool profile = false;   ///< Print host-side profiling breakdown.
   bool verify = false;    ///< Compare selected backend against sequential CPU.
+
+  /**
+   * @brief Hybrid engine: fixed fraction of ROWS assigned to the CPU.
+   *
+   * nullopt = auto-calibrate (time CPU-only and GPU-only steps a priori, then
+   * pick the divisible-load-theory optimum). A value in [0,1] overrides
+   * calibration with a static, manually chosen split. Ignored by other engines.
+   */
+  std::optional<double> cpuFrac;
+
+  /// @brief Hybrid engine: steps timed per node during the calibration phase.
+  unsigned calibSteps = 10;
+
+  /// @brief Hybrid engine: GPU backend to pair with the CPU ("auto"|"cuda"|"opencl").
+  std::string hybridGpu = "auto";
 };
 
 /**

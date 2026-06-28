@@ -87,3 +87,26 @@ if(GOL_OPENCL_ENABLED)
     )
     gtest_discover_tests(gol_opencl_tests)
 endif()
+
+# Cross-backend equivalence: HybridEngine (CPU + GPU, static load balancing) vs the
+# CpuEngine oracle, across CPU fractions, both edge modes, and the calibrated split.
+# Only built when the hybrid engine was configured (a GPU backend present). Requires
+# a GPU/OpenCL device at run time. GOL_HAVE_{CUDA,OPENCL} tell the test which GPU
+# backends to exercise.
+if(GOL_HYBRID_ENABLED)
+    add_executable(gol_hybrid_tests hybrid_equivalence_test.cpp)
+    target_link_libraries(gol_hybrid_tests
+        PRIVATE
+            gol_core
+            gol_cpu
+            gol_hybrid
+            GTest::gtest_main
+    )
+    if(GOL_CUDA_ENABLED)
+        target_compile_definitions(gol_hybrid_tests PRIVATE GOL_HAVE_CUDA)
+    endif()
+    if(GOL_OPENCL_ENABLED)
+        target_compile_definitions(gol_hybrid_tests PRIVATE GOL_HAVE_OPENCL)
+    endif()
+    gtest_discover_tests(gol_hybrid_tests)
+endif()

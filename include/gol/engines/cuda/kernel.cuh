@@ -29,4 +29,27 @@ void launchLifeStep(const unsigned char* dSrc, unsigned char* dDst,
                     std::size_t rows, std::size_t cols, bool wrap,
                     int blockSize, bool useShared);
 
+/**
+ * @brief Launch one generation of the HALO (ghost-row) kernel for a hybrid
+ *        partition (read @p dSrc, write @p dDst), without synchronising.
+ *
+ * Operates on a buffer of height `realRows + 2`: buffer row 0 is the top ghost,
+ * rows [1, realRows] are the real rows, and row `realRows + 1` is the bottom
+ * ghost. Only the real rows are written. Vertical neighbours are read straight
+ * from the ghost rows (no vertical edge logic — the host fills the ghosts to
+ * realise bounded or toroidal edges); the horizontal (column) edge rule is
+ * applied per @p wrap. Used by HybridEngine for its GPU share (Barlas chapter
+ * 11.3 row-wise domain decomposition).
+ * @param dSrc     Device source buffer of `(realRows + 2) * cols` bytes.
+ * @param dDst     Device destination buffer of the same size.
+ * @param realRows Number of real rows owned by the partition.
+ * @param cols     Board width.
+ * @param wrap     false = bounded columns, true = toroidal columns.
+ * @param blockSize Threads per block; mapped to a 32 x ceil(blockSize/32) tile.
+ * @throws std::runtime_error if the kernel launch fails.
+ */
+void launchLifeHaloStep(const unsigned char* dSrc, unsigned char* dDst,
+                        std::size_t realRows, std::size_t cols, bool wrap,
+                        int blockSize);
+
 } // namespace gol

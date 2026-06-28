@@ -23,6 +23,9 @@
 #ifdef GOL_HAVE_OPENCL
 #include "gol/engines/OpenCLEngine.hpp"
 #endif
+#ifdef GOL_HAVE_HYBRID
+#include "gol/engines/HybridEngine.hpp"
+#endif
 #include "gol/patterns/Pattern.hpp"
 #include "gol/patterns/RleLoader.hpp"
 #ifndef _WIN32
@@ -94,6 +97,15 @@ std::unique_ptr<ISimEngine> makeEngine(const Config& cfg) {
     case EngineKind::OpenCL:
       return std::make_unique<OpenCLEngine>(cfg.blockSize, cfg.wrap, cfg.useShared);
 #endif
+#ifdef GOL_HAVE_HYBRID
+    case EngineKind::Hybrid: {
+      GpuBackend backend = GpuBackend::Auto;
+      if (cfg.hybridGpu == "cuda") backend = GpuBackend::Cuda;
+      else if (cfg.hybridGpu == "opencl") backend = GpuBackend::OpenCL;
+      return std::make_unique<HybridEngine>(cfg.threads, cfg.blockSize, cfg.wrap,
+                                            backend, cfg.cpuFrac, cfg.calibSteps);
+    }
+#endif
     default:
       return nullptr; // backend not compiled into this build
   }
@@ -110,10 +122,37 @@ std::string backendConfig(const Config& cfg) {
     case EngineKind::OpenCL:
       return "block=" + std::to_string(cfg.blockSize) +
              (cfg.useShared ? " local" : " no-local");
+    case EngineKind::Hybrid:
+      return "gpu=" + cfg.hybridGpu + " block=" + std::to_string(cfg.blockSize) +
+             " threads=" + std::to_string(cfg.threads) +
+             (cfg.cpuFrac ? " cpu-frac=" + std::to_string(*cfg.cpuFrac)
+                          : " auto-split");
     default:
       return "";
   }
 }
+
+#ifdef GOL_HAVE_HYBRID
+/// @brief Print the chosen split, measured node rates, and the DLT bound.
+void printHybridInfo(const ISimEngine& engine) {
+  const auto* h = dynamic_cast<const HybridEngine*>(&engine);
+  if (!h) return;
+  std::cout << "split:      cpu=" << h->cpuRows() << " rows ("
+            << std::fixed << std::setprecision(1) << (h->cpuFraction() * 100.0)
+            << "%)  gpu=" << h->gpuRows() << " rows ("
+            << ((1.0 - h->cpuFraction()) * 100.0) << "%)  [" << h->gpuName() << "]\n";
+  if (h->calibrated()) {
+    const double cpuM = h->cpuRate() / 1e6;
+    const double gpuM = h->gpuRate() / 1e6;
+    std::cout << std::setprecision(1)
+              << "calib:      R_cpu=" << cpuM << " Mcells/s  R_gpu=" << gpuM
+              << " Mcells/s  DLT bound R_cpu+R_gpu=" << (cpuM + gpuM)
+              << " Mcells/s\n";
+  } else {
+    std::cout << "calib:      (skipped -- static --cpu-frac)\n";
+  }
+}
+#endif
   std::size_t firstMismatchIndex(const Grid& a, const Grid& b) {
     for (std::size_t y = 0; y < a.rows(); ++y) {
       for (std::size_t x = 0; x < a.cols(); ++x) {
@@ -269,7 +308,9 @@ int main(int argc, char** argv) {
                 << "overhead:   " << launchAndSyncMs << " ms  (launch/sync inside steps)\n"
                 << "download:   " << downloadMs << " ms\n"
                 << "total:      " << totalMs << " ms\n";
-
+#ifdef GOL_HAVE_HYBRID
+      printHybridInfo(*engine);
+#endif
       return 0;
     }
     if (cfg.csv) {
@@ -289,6 +330,9 @@ int main(int argc, char** argv) {
                 << mcellsPerSec(kernelMs) << " Mcells/s\n"
                 << "wall:       " << wallMs << " ms  -> "
                 << mcellsPerSec(wallMs) << " Mcells/s\n";
+#ifdef GOL_HAVE_HYBRID
+      printHybridInfo(*engine);
+#endif
     }
     return 0;
   } catch (const std::exception& e) {

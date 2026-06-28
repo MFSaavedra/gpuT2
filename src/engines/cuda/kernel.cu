@@ -100,6 +100,40 @@ __global__ void lifeShared(const unsigned char* __restrict__ src,
   dst[static_cast<std::size_t>(row) * cols + col] = nextState(tile[ly * tileW + lx], n);
 }
 
+// Halo (ghost-row) kernel for a hybrid CPU+GPU partition. The buffer has height
+// realRows+2: row 0 is the top ghost, rows [1, realRows] are the real rows, and
+// row realRows+1 is the bottom ghost. Each thread computes one real row, reading
+// its vertical neighbours straight from the buffer (ghost rows included -- no
+// vertical edge logic) and applying the horizontal edge rule per `wrap`. The host
+// fills the ghosts each generation, so the result is bit-for-bit identical to the
+// CpuEngine oracle in both edge modes.
+__global__ void lifeHalo(const unsigned char* __restrict__ src,
+                         unsigned char* __restrict__ dst,
+                         int realRows, int cols, bool wrap) {
+  const int col = blockIdx.x * blockDim.x + threadIdx.x;
+  const int r = blockIdx.y * blockDim.y + threadIdx.y; // real-row index in [0, realRows)
+  if (col >= cols || r >= realRows) return;
+
+  const int br = r + 1; // buffer row of this real row (row 0 is the top ghost)
+
+  int n = 0;
+  for (int dy = -1; dy <= 1; ++dy) {
+    for (int dx = -1; dx <= 1; ++dx) {
+      if (dx == 0 && dy == 0) continue;
+      int nc = col + dx;
+      if (wrap) {
+        nc = (nc + cols) % cols;
+      } else if (nc < 0 || nc >= cols) {
+        continue; // bounded: out-of-range column is dead
+      }
+      const int nr = br + dy; // vertical neighbour is always a valid buffer row
+      n += src[static_cast<std::size_t>(nr) * cols + nc];
+    }
+  }
+  const std::size_t idx = static_cast<std::size_t>(br) * cols + col;
+  dst[idx] = nextState(src[idx], n);
+}
+
 } // namespace
 
 void launchLifeStep(const unsigned char* dSrc, unsigned char* dDst,
@@ -124,6 +158,27 @@ void launchLifeStep(const unsigned char* dSrc, unsigned char* dDst,
   const cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
     throw std::runtime_error(std::string("CUDA kernel launch failed: ") +
+                             cudaGetErrorString(err));
+  }
+}
+
+void launchLifeHaloStep(const unsigned char* dSrc, unsigned char* dDst,
+                        std::size_t realRows, std::size_t cols, bool wrap,
+                        int blockSize) {
+  if (realRows == 0) return; // partition owns no rows -> nothing to do
+  if (blockSize < 32) blockSize = 32;
+  const int bx = 32;                              // 32-wide rows -> coalesced loads
+  const int by = (blockSize + bx - 1) / bx;       // 32/64/128/256 -> 1/2/4/8
+  const dim3 block(bx, by);
+  const dim3 grid(static_cast<unsigned>((cols + bx - 1) / bx),
+                  static_cast<unsigned>((realRows + by - 1) / by));
+
+  lifeHalo<<<grid, block>>>(dSrc, dDst, static_cast<int>(realRows),
+                            static_cast<int>(cols), wrap);
+
+  const cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    throw std::runtime_error(std::string("CUDA halo kernel launch failed: ") +
                              cudaGetErrorString(err));
   }
 }

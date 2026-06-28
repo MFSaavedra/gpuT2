@@ -113,3 +113,47 @@ __kernel void life_local(
     uchar alive = tile[center_y * tile_w + center_x];
     dst[idx] = next_state(alive, n);
 }
+
+// Halo (ghost-row) kernel for a hybrid CPU+GPU partition. The buffer has height
+// real_rows+2: row 0 is the top ghost, rows [1, real_rows] are the real rows, and
+// row real_rows+1 is the bottom ghost. Each work-item computes one real row,
+// reading its vertical neighbours straight from the buffer (ghost rows included --
+// no vertical edge logic) and applying the horizontal edge rule per `wrap`. The
+// host fills the ghosts each generation, so the result is bit-for-bit identical to
+// the CpuEngine oracle in both edge modes. Mirrors lifeHalo in kernel.cu.
+__kernel void life_halo(
+    __global const uchar* src,
+    __global uchar* dst,
+    int real_rows,
+    int cols,
+    int wrap
+) {
+    int col = get_global_id(0);
+    int r = get_global_id(1); // real-row index in [0, real_rows)
+
+    if (col >= cols || r >= real_rows) return;
+
+    int br = r + 1; // buffer row of this real row (row 0 is the top ghost)
+
+    int n = 0;
+
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            if (dx == 0 && dy == 0) continue;
+
+            int nc = col + dx;
+
+            if (wrap) {
+                nc = (nc + cols) % cols;
+            } else {
+                if (nc < 0 || nc >= cols) continue;
+            }
+
+            int nr = br + dy; // vertical neighbour is always a valid buffer row
+            n += src[nr * cols + nc];
+        }
+    }
+
+    int idx = br * cols + col;
+    dst[idx] = next_state(src[idx], n);
+}

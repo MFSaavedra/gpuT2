@@ -32,11 +32,15 @@ namespace {
       "      --wrap           toroidal edges (default: bounded)\n"
       "      --seed N         RNG seed for random fill (default 1)\n"
       "      --rle PATH       seed from an RLE pattern instead of random\n"
-      "      --engine NAME    cpu | cuda | opencl    (default cpu)\n"
+      "      --engine NAME    cpu | cuda | opencl | hybrid  (default cpu)\n"
       "      --renderer NAME  null | text | ansi     (default null)\n"
       "                       text = scrolling ASCII dump; ansi = in-place animation\n"
       "      --block N        GPU threads per block  (default 256)\n"
       "      --shared         GPU shared-memory tiling\n"
+      "      --cpu-frac F     hybrid: fixed CPU row fraction in [0,1]\n"
+      "                       (default: auto-calibrate the split)\n"
+      "      --gpu-backend N  hybrid: auto | cuda | opencl  (default auto)\n"
+      "      --calib-steps N  hybrid: calibration steps per node (default 10)\n"
       "      --profile        print upload/compute/download timing breakdown\n"
       "      --csv            print one CSV data row instead of the human summary\n"
       "      --csv-header     print the CSV header line and exit (for sweep scripts)\n"
@@ -76,6 +80,21 @@ unsigned long long toULL(const std::string& s, const char* flag) {
   }
 }
 
+/**
+ * @brief Parse a string to double, erroring out on bad input.
+ * @param s    String to parse.
+ * @param flag Flag name, for error messages.
+ * @return The parsed value. Exits the process if @p s is not a number.
+ */
+double toDouble(const std::string& s, const char* flag) {
+  try {
+    return std::stod(s);
+  } catch (const std::exception&) {
+    std::cerr << "error: " << flag << " expects a number, got '" << s << "'\n";
+    usageAndExit(2);
+  }
+}
+
 } // namespace
 
 Config parse(int argc, char** argv) {
@@ -103,6 +122,7 @@ Config parse(int argc, char** argv) {
       if (v == "cpu") cfg.engine = EngineKind::Cpu;
       else if (v == "cuda") cfg.engine = EngineKind::Cuda;
       else if (v == "opencl") cfg.engine = EngineKind::OpenCL;
+      else if (v == "hybrid") cfg.engine = EngineKind::Hybrid;
       else { std::cerr << "error: unknown engine '" << v << "'\n"; usageAndExit(2); }
     } else if (arg == "--renderer") {
       const std::string v = nextValue(argc, argv, i, "--renderer");
@@ -114,6 +134,14 @@ Config parse(int argc, char** argv) {
       cfg.blockSize = static_cast<int>(toULL(nextValue(argc, argv, i, "--block"), "--block"));
     } else if (arg == "--shared") {
       cfg.useShared = true;
+    } else if (arg == "--cpu-frac") {
+      cfg.cpuFrac = toDouble(nextValue(argc, argv, i, "--cpu-frac"), "--cpu-frac");
+    } else if (arg == "--gpu-backend") {
+      const std::string v = nextValue(argc, argv, i, "--gpu-backend");
+      if (v == "auto" || v == "cuda" || v == "opencl") cfg.hybridGpu = v;
+      else { std::cerr << "error: unknown gpu-backend '" << v << "'\n"; usageAndExit(2); }
+    } else if (arg == "--calib-steps") {
+      cfg.calibSteps = static_cast<unsigned>(toULL(nextValue(argc, argv, i, "--calib-steps"), "--calib-steps"));
     } else if (arg == "--verify") {
       cfg.verify = true;
     } else if (arg == "--csv") {
