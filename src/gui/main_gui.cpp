@@ -36,7 +36,7 @@ namespace {
       "      --rle PATH       seed from an RLE pattern instead of random\n"
       "      --block N        CUDA threads per block  (default 128)\n"
       "  -h, --help           show this help\n\n"
-      "Controls: space play/pause | S step | R reseed | C clear | F fit\n"
+      "Controls: space play/pause | S step | R reseed | C clear | I reset | F fit\n"
       "          wheel zoom | middle/right-drag pan | left-drag paint (Shift erases)\n";
   std::exit(code);
 }

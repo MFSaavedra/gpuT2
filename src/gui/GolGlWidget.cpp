@@ -41,9 +41,11 @@ std::string readFile(const std::string& path) {
 GolGlWidget::GolGlWidget(gol::Config cfg, QWidget* parent)
     : QOpenGLWidget(parent),
       cfg_(cfg),
-      grid_(cfg.rows, cfg.cols) {
+      grid_(cfg.rows, cfg.cols),
+      initialGrid_(cfg.rows, cfg.cols) {
   setFocusPolicy(Qt::StrongFocus); // receive key events
   seedGrid();
+  initialGrid_ = grid_; // remember the seed as the reset point
 
   timer_ = new QTimer(this);
   connect(timer_, &QTimer::timeout, this, [this] { update(); });
@@ -248,17 +250,9 @@ void GolGlWidget::paintGL() {
     viewInitialised_ = true;
   }
 
-  // Advance the simulation. With a generation cap (--gens N), auto-pause on reaching it.
-  if (playing_ && engine_) {
-    for (int i = 0; i < speed_; ++i) {
-      engine_->step();
-      ++generation_;
-      if (cfg_.generations > 0 && generation_ >= cfg_.generations) {
-        playing_ = false;
-        break;
-      }
-    }
-  }
+  // Present the CURRENT board first, then advance at the end of the frame. This way a
+  // cell painted between frames is displayed for the frame it was drawn (and only then
+  // evolves) -- otherwise stepping would consume it before it was ever shown.
 
   // Move the current board into the display texture.
   glBindTexture(GL_TEXTURE_2D, tex_);
@@ -311,6 +305,18 @@ void GolGlWidget::paintGL() {
     fps_ = fps_ > 0.0 ? 0.9 * fps_ + 0.1 * inst : inst;
   }
   emit statsChanged(generation_, fps_, scale_);
+
+  // Advance for the NEXT frame. With a generation cap (--gens N), auto-pause on it.
+  if (playing_ && engine_) {
+    for (int i = 0; i < speed_; ++i) {
+      engine_->step();
+      ++generation_;
+      if (cfg_.generations > 0 && generation_ >= cfg_.generations) {
+        playing_ = false;
+        break;
+      }
+    }
+  }
 }
 
 QPointF GolGlWidget::screenToBoard(QPointF posLogical) const {
@@ -358,6 +364,7 @@ void GolGlWidget::stepOnce() {
 
 void GolGlWidget::reseed() {
   grid_.randomize(cfg_.seed + (++reseedCounter_));
+  initialGrid_ = grid_; // the new random board is the new reset point
   if (engine_) engine_->upload(grid_);
   generation_ = 0;
   update();
@@ -365,7 +372,16 @@ void GolGlWidget::reseed() {
 
 void GolGlWidget::clearBoard() {
   grid_.fill(0);
+  initialGrid_ = grid_; // an empty board is the new reset point
   if (engine_) engine_->upload(grid_);
+  generation_ = 0;
+  update();
+}
+
+void GolGlWidget::resetToInitial() {
+  if (!engine_) return;
+  grid_ = initialGrid_; // restore the snapshot taken at generation 0
+  engine_->upload(grid_);
   generation_ = 0;
   update();
 }
@@ -378,6 +394,7 @@ void GolGlWidget::loadRle(const QString& path) {
     const std::size_t ox = cfg_.cols > p.width ? (cfg_.cols - p.width) / 2 : 0;
     const std::size_t oy = cfg_.rows > p.height ? (cfg_.rows - p.height) / 2 : 0;
     p.applyTo(grid_, ox, oy);
+    initialGrid_ = grid_; // the loaded pattern is the new reset point
     engine_->upload(grid_);
     generation_ = 0;
     update();
@@ -448,6 +465,7 @@ void GolGlWidget::keyPressEvent(QKeyEvent* e) {
     case Qt::Key_R:     reseed(); break;
     case Qt::Key_C:     clearBoard(); break;
     case Qt::Key_F:     fitView(); break;
+    case Qt::Key_I:     resetToInitial(); break;
     default:            QOpenGLWidget::keyPressEvent(e); return;
   }
 }

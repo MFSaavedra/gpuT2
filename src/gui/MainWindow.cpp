@@ -33,6 +33,8 @@ MainWindow::MainWindow(const gol::Config& cfg, QWidget* parent)
   auto* playBtn = new QPushButton("Play / Pause");
   playBtn->setCheckable(true);
   auto* stepBtn = new QPushButton("Step");
+  auto* resetBtn = new QPushButton("Reset");
+  resetBtn->setToolTip("Restore the initial board (generation 0)");
   auto* reseedBtn = new QPushButton("Reseed");
   auto* clearBtn = new QPushButton("Clear");
   auto* openBtn = new QPushButton("Open RLE…");
@@ -51,6 +53,7 @@ MainWindow::MainWindow(const gol::Config& cfg, QWidget* parent)
 
   form->addRow(playBtn);
   form->addRow(stepBtn);
+  form->addRow(resetBtn);
   form->addRow(reseedBtn);
   form->addRow(clearBtn);
   form->addRow(openBtn);
@@ -70,6 +73,7 @@ MainWindow::MainWindow(const gol::Config& cfg, QWidget* parent)
   // ---- wiring ----
   connect(playBtn, &QPushButton::toggled, view_, &GolGlWidget::setPlaying);
   connect(stepBtn, &QPushButton::clicked, view_, &GolGlWidget::stepOnce);
+  connect(resetBtn, &QPushButton::clicked, view_, &GolGlWidget::resetToInitial);
   connect(reseedBtn, &QPushButton::clicked, view_, &GolGlWidget::reseed);
   connect(clearBtn, &QPushButton::clicked, view_, &GolGlWidget::clearBoard);
   connect(fitBtn, &QPushButton::clicked, view_, &GolGlWidget::fitView);

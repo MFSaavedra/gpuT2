@@ -88,10 +88,13 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   A fragment shader colours each cell (binary or live-neighbour count); a fullscreen-triangle vertex
   shader needs no VBO. Shaders are GL 3.3 core, **read at runtime** from `src/gui/shaders/` (like
   `kernel.cl`). Interactive: wheel zoom, middle/right-drag pan, left-drag paint (Shift erases, via the new
-  `ISimEngine::pokeCell`), space/S/R/C/F keys, and a Qt control panel (play/pause, step, reseed, clear,
+  `ISimEngine::pokeCell`), keys space/S/R/C/I/F, and a Qt control panel (play/pause, step, reset, reseed, clear,
   **Open RLE…**, speed, colour mode, wrap). CLI mirrors the headless `gol` flags
   (`--rows/--cols/--gens/--threads/--wrap/--seed/--rle/--engine cpu|cuda/--block` + `COLSxROWS`); `--gens`
-  is an interactive auto-pause. **Optimus caveat:** on this hybrid-graphics box OpenGL defaults to the
+  is an interactive auto-pause. Each frame **presents the current board then steps** (not step-then-present),
+  so a freshly painted cell is visible the frame it is drawn before it evolves; **reset** restores a
+  generation-0 snapshot (seed / last-loaded pattern), kept separate from the host-upload scratch board.
+  **Optimus caveat:** on this hybrid-graphics box OpenGL defaults to the
   Intel iGPU, on which interop is unavailable (it falls back to host-upload); `scripts/run_gui.sh` sets
   PRIME-offload env vars so the GL context lands on the NVIDIA GPU and the zero-copy path is used.
 

@@ -53,8 +53,9 @@ public slots:
   void setPlaying(bool playing);   ///< Start/stop advancing the simulation.
   void togglePlaying();            ///< Flip play/pause.
   void stepOnce();                 ///< Advance exactly one generation (when paused).
-  void reseed();                   ///< Re-randomise the board and reset the generation counter.
-  void clearBoard();               ///< Set every cell dead and reset the generation counter.
+  void reseed();                   ///< Re-randomise the board (becomes the new initial state).
+  void clearBoard();               ///< Set every cell dead (becomes the new initial state).
+  void resetToInitial();           ///< Restore the board to generation 0 of the current pattern.
   void setSpeed(int gensPerFrame); ///< Generations advanced per displayed frame.
   void setColorMode(int mode);     ///< 0 = binary, 1 = neighbour count.
   void setWrapEnabled(bool wrap);  ///< Toggle bounded/toroidal edges (rebuilds the engine).
@@ -97,6 +98,7 @@ private:
 
   gol::Config cfg_;                          ///< Board/sim configuration.
   gol::Grid grid_;                           ///< Host board: seed, reseed/clear, and host-upload scratch.
+  gol::Grid initialGrid_;                    ///< Snapshot of the board at generation 0, for Reset.
   std::unique_ptr<gol::ISimEngine> engine_;  ///< The simulation (CPU or CUDA).
   Present present_ = Present::HostUpload;     ///< Active presentation path.
 
