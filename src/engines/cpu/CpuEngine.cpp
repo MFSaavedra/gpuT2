@@ -134,4 +134,9 @@ void CpuEngine::download(Grid& out) {
   std::copy(cur_.begin(), cur_.end(), out.data());
 }
 
+void CpuEngine::pokeCell(std::size_t x, std::size_t y, unsigned char value) {
+  if (x >= cols_ || y >= rows_) return;
+  cur_[y * cols_ + x] = value; // in-place edit of the live buffer
+}
+
 } // namespace gol

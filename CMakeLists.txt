@@ -122,6 +122,54 @@ if(BUILD_OPENCL)
 endif()
 
 # ----------------------------------------------------------------------------
+# Optional Qt OpenGL viewer (opt-in). Builds a separate `gol_gui` executable; the
+# headless `gol` benchmark binary is untouched and never links Qt or OpenGL.
+#
+# Runs on the CPU engine alone (no CUDA toolkit needed). When the CUDA engine is
+# also configured (-DBUILD_CUDA=ON), it additionally offers the zero-copy CUDA/GL
+# interop display path; otherwise (and as a fallback) it uses host-upload display.
+# ----------------------------------------------------------------------------
+option(BUILD_GUI "Build the Qt OpenGL Game of Life viewer" OFF)
+if(BUILD_GUI)
+    find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
+
+    set(_gui_libs gol_core gol_cpu
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets)
+    set(_gui_defs "")
+
+    if(GOL_CUDA_ENABLED)
+        find_package(CUDAToolkit REQUIRED)
+        # CUDA<->GL interop bridge: compiled by nvcc (it includes cuda_gl_interop.h),
+        # but exposes a CUDA-free header so the Qt code (host compiler) can call it.
+        add_library(gol_cudagl ${CMAKE_CURRENT_SOURCE_DIR}/src/render/CudaGlInterop.cu)
+        target_include_directories(gol_cudagl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        set_target_properties(gol_cudagl PROPERTIES
+            CUDA_ARCHITECTURES 75
+            CUDA_STANDARD 17
+            CUDA_STANDARD_REQUIRED ON)
+        target_link_libraries(gol_cudagl PUBLIC CUDA::cudart)
+
+        list(APPEND _gui_libs gol_cuda gol_cudagl CUDA::cudart)
+        list(APPEND _gui_defs GOL_HAVE_CUDA)
+    endif()
+
+    add_executable(gol_gui
+        src/gui/main_gui.cpp
+        src/gui/GolGlWidget.cpp
+        src/gui/MainWindow.cpp
+        # Headers carry Q_OBJECT and live apart from their .cpp, so list them
+        # explicitly for AUTOMOC to scan (it only auto-pairs same-dir basenames).
+        include/gol/gui/GolGlWidget.hpp
+        include/gol/gui/MainWindow.hpp
+    )
+    set_target_properties(gol_gui PROPERTIES AUTOMOC ON)
+    target_link_libraries(gol_gui PRIVATE ${_gui_libs})
+    # Shaders are read at runtime (like kernel.cl), so bake in their source dir.
+    target_compile_definitions(gol_gui PRIVATE
+        GOL_GUI_SHADER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/gui/shaders" ${_gui_defs})
+endif()
+
+# ----------------------------------------------------------------------------
 # Tests
 # ----------------------------------------------------------------------------
 include(CTest)

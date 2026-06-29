@@ -55,6 +55,30 @@ public:
   int blockSize() const { return blockSize_; } ///< @return Threads per block in use.
   bool useShared() const { return useShared_; } ///< @return Whether the shared-memory kernel is used.
 
+  // -- Interop accessors (used by the Qt/OpenGL viewer; no-op for the headless app) --
+  std::size_t rows() const { return rows_; } ///< @return Board height set by upload().
+  std::size_t cols() const { return cols_; } ///< @return Board width set by upload().
+  /**
+   * @brief Opaque device pointer to the current-generation buffer.
+   *
+   * Points into CUDA device memory (the same buffer step() writes). The viewer
+   * does a device->device copy from here into a GL-registered PBO, so the board
+   * is displayed without ever crossing PCIe to the host. Returned as void* to
+   * keep this header free of CUDA types.
+   * @return Device pointer to the current buffer, or nullptr before upload().
+   */
+  const void* currentDeviceBuffer() const { return dCur_; }
+  /**
+   * @brief Set a single cell in the current device buffer (interactive editing).
+   *
+   * A 1-byte host->device write into the live buffer; out-of-range coordinates
+   * are ignored. Used by the viewer's mouse paint tool.
+   * @param x     Column, [0, cols()).
+   * @param y     Row, [0, rows()).
+   * @param value New cell value (0 = dead, 1 = alive).
+   */
+  void pokeCell(std::size_t x, std::size_t y, unsigned char value) override;
+
 private:
   int blockSize_;        ///< Threads per block.
   bool wrap_;            ///< Edge mode: true = toroidal, false = bounded.

@@ -62,6 +62,7 @@ public:
   void download(Grid& out) override;            ///< @copydoc ISimEngine::download
   double lastKernelMillis() const override { return lastMs_; } ///< @copydoc ISimEngine::lastKernelMillis
   std::string name() const override { return "cpu"; }          ///< @copydoc ISimEngine::name
+  void pokeCell(std::size_t x, std::size_t y, unsigned char value) override; ///< @copydoc ISimEngine::pokeCell
 
   /**
    * @brief Resolved worker count (after mapping 0 -> hardware_concurrency).

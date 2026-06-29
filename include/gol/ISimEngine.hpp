@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 
 #include "gol/Grid.hpp"
@@ -78,6 +79,20 @@ public:
    * @return Backend name, e.g. "cpu", "cuda".
    */
   virtual std::string name() const = 0;
+
+  /**
+   * @brief Set a single cell in the engine's current buffer (interactive editing).
+   *
+   * Optional: the default is a no-op, so a backend that does not support live
+   * editing degrades gracefully (the viewer's paint tool simply does nothing).
+   * Out-of-range coordinates must be ignored. Used by the GUI's mouse paint.
+   * @param x     Column, [0, cols).
+   * @param y     Row, [0, rows).
+   * @param value New cell value (0 = dead, 1 = alive).
+   */
+  virtual void pokeCell(std::size_t x, std::size_t y, unsigned char value) {
+    (void)x; (void)y; (void)value;
+  }
 };
 
 } // namespace gol

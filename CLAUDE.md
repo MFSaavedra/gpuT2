@@ -8,6 +8,10 @@ University assignment (Tarea 2, course CC7515-1 "Computación en GPU", U. de Chi
 Conway's Game of Life three times — sequential **CPU**, **CUDA**, and **OpenCL** — then benchmark
 cells-evaluated-per-second across grid sizes and report the GPU speed-up vs CPU.
 
+This branch (`cuda_gl_interop`) adds **Tarea 3** (option 1, "Interop – Shaders"): a real-time **Qt +
+OpenGL viewer** (`gol_gui`) for the same simulation, using **CUDA↔OpenGL interop** so the GPU-computed
+board is displayed without a host round trip. See the `gol_gui` bullet under Current state.
+
 **Rule variant (do not use vanilla Conway rules):** a dead cell is born on **exactly 3 OR exactly 6**
 live neighbours; a live cell survives on 2 or 3. The extra "birth on 6" rule is the one detail that's
 easy to get wrong — it must hold in every implementation (CPU, CUDA, OpenCL). This is the named rule
@@ -70,6 +74,27 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   `nsys`: ~30 µs/step launch overhead, H2D 8.4 GB/s (pageable `std::vector`). Report Resultados/Análisis,
   §Cotas, and §Perfilamiento are filled from this (`results/profiling/*.ncu-rep`).
 
+- **`gol_gui`** — Qt + OpenGL viewer (this branch, Tarea 3). A **separate executable** from the headless
+  `gol`: Qt owns the event loop (`QApplication::exec`), so it cannot reuse `main.cpp`'s generation loop or
+  the `IRenderer` seam (which assumes host data); it is a peer front-end on the same core. It drives any
+  `ISimEngine` and presents the board through one of two paths chosen at init:
+  - **Interop** (zero-copy): a CUDA engine writes its current device buffer straight into a GL-registered
+    PBO (device→device, no PCIe round trip), which OpenGL streams into a `GL_R8UI` texture. Used when a
+    `CudaEngine` runs against a GL context on the same (NVIDIA) GPU.
+  - **HostUpload**: the board is `download()`ed to host memory and uploaded to the texture each frame.
+    Used for the **CPU engine** (so the viewer builds/runs with no CUDA toolkit), and as a graceful
+    **fallback** when interop is unavailable (e.g. a GL context on an Optimus iGPU — see below).
+
+  A fragment shader colours each cell (binary or live-neighbour count); a fullscreen-triangle vertex
+  shader needs no VBO. Shaders are GL 3.3 core, **read at runtime** from `src/gui/shaders/` (like
+  `kernel.cl`). Interactive: wheel zoom, middle/right-drag pan, left-drag paint (Shift erases, via the new
+  `ISimEngine::pokeCell`), space/S/R/C/F keys, and a Qt control panel (play/pause, step, reseed, clear,
+  **Open RLE…**, speed, colour mode, wrap). CLI mirrors the headless `gol` flags
+  (`--rows/--cols/--gens/--threads/--wrap/--seed/--rle/--engine cpu|cuda/--block` + `COLSxROWS`); `--gens`
+  is an interactive auto-pause. **Optimus caveat:** on this hybrid-graphics box OpenGL defaults to the
+  Intel iGPU, on which interop is unavailable (it falls back to host-upload); `scripts/run_gui.sh` sets
+  PRIME-offload env vars so the GL context lands on the NVIDIA GPU and the zero-copy path is used.
+
 All three backends now run and verify against the `CpuEngine` reference oracle. GPU CMake targets are
 opt-in and double-gated (the option **and** the source must exist); the project still builds and runs
 (CPU + text) with neither toolkit present. The chosen optimization options to benchmark are **#1 block
@@ -92,6 +117,21 @@ GPU targets are opt-in:
 cmake -S . -B build -DBUILD_CUDA=ON -DBUILD_OPENCL=ON
 ```
 
+The Qt + OpenGL viewer (`gol_gui`) is opt-in via `-DBUILD_GUI=ON` (needs Qt6: Widgets, OpenGL,
+OpenGLWidgets). It does **not** require CUDA — without `-DBUILD_CUDA=ON` it builds CPU-only (host-upload
+display); with `-DBUILD_CUDA=ON` it additionally offers the zero-copy CUDA/GL interop path:
+
+```bash
+cmake -S . -B build -DBUILD_CUDA=ON -DBUILD_GUI=ON
+cmake --build build --target gol_gui
+./scripts/run_gui.sh 1024x1024 --rle patterns/highlife_replicator.rle   # NVIDIA GL context (zero-copy)
+./build/gol_gui --engine cpu 512x512                                     # CPU engine, runs anywhere
+```
+
+`scripts/run_gui.sh` sets PRIME-offload env vars (`__NV_PRIME_RENDER_OFFLOAD`, `__GLX_VENDOR_LIBRARY_NAME`,
+`QT_QPA_PLATFORM=xcb`) so the GL context is on the NVIDIA GPU; a bare `./build/gol_gui` still runs but
+falls back to host-upload on an Optimus iGPU context.
+
 Run a subset of tests via ctest regex:
 
 ```bash
@@ -108,21 +148,35 @@ Strategy pattern. A backend-agnostic core (`Grid`, `Config`, patterns) plus two 
 application owns the loop and wires a chosen engine + renderer at runtime:
 
 ```
-Application (main loop, Config/CLI)
+gol (headless app: main loop, Config/CLI)
   |-- ISimEngine   <- CpuEngine | CudaEngine | OpenCLEngine
-  |-- IRenderer    <- NullRenderer | TextRenderer | AnsiRenderer | (GuiRenderer later)
+  |-- IRenderer    <- NullRenderer | TextRenderer | AnsiRenderer
   '-- Grid + Patterns (shared, backend-agnostic)
+
+gol_gui (Qt front-end: Qt owns the loop; not an IRenderer)
+  |-- ISimEngine   <- CpuEngine | CudaEngine     (driven directly by GolGlWidget)
+  '-- present path  <- CudaGlInterop (zero-copy PBO) | host-upload (download -> texture)
 ```
 
-Loop: render the seed as generation 0, then `engine->step()` -> (only if a renderer is attached)
-`engine->download(grid)` -> `renderer->render(grid, gen+1)` -> repeat. Under `NullRenderer` the
-download + render are skipped entirely, so host<->device transfers never enter the benchmark.
+Loop (headless): render the seed as generation 0, then `engine->step()` -> (only if a renderer is
+attached) `engine->download(grid)` -> `renderer->render(grid, gen+1)` -> repeat. Under `NullRenderer`
+the download + render are skipped entirely, so host<->device transfers never enter the benchmark.
+
+The **GUI is a separate front-end**, not an `IRenderer`: Qt's `QApplication::exec()` owns the loop and
+calls back into `GolGlWidget` (a `QOpenGLWidget`), so it cannot be plugged into the headless loop or the
+`render(const Grid&)` seam (which presupposes host data — the very copy interop avoids). The widget owns
+the engine and a `CudaGlInterop` bridge; per frame it steps on the GPU, moves the board into a texture
+(zero-copy interop or host-upload), and draws a fullscreen quad. `gol_gui` is gated on `BUILD_GUI` and is
+independent of the headless `gol`, which never links Qt or OpenGL.
 
 Interfaces:
 
 - `ISimEngine`: `upload(const Grid&)`, `step()`, `download(Grid&)`, `lastKernelMillis() const`,
-  `name() const`, virtual dtor. CUDA/OpenCL engines own their device buffers and do the double-buffer
-  ping-pong internally (read A -> write B -> swap).
+  `name() const`, virtual dtor, plus `pokeCell(x, y, value)` (default no-op; overridden by `CpuEngine`
+  and `CudaEngine` for the GUI's mouse paint — backends that don't support live editing degrade
+  gracefully). CUDA/OpenCL engines own their device buffers and do the double-buffer ping-pong
+  internally (read A -> write B -> swap). `CudaEngine` also exposes `rows()/cols()/currentDeviceBuffer()`
+  for the interop viewer.
 - `IRenderer`: `render(const Grid&, uint64_t gen)`, `shouldClose()`/`staysOpen()` (both default false).
   `NullRenderer` does
   nothing — **always benchmark against it** so render/print cost never pollutes cells/sec. `TextRenderer`
@@ -144,22 +198,28 @@ both, the seq-vs-parallel test covers each mode, and the GPU backends must match
 
 CMake: a core library (always), a CPU engine (always), CUDA/OpenCL engine libraries gated on
 `BUILD_CUDA` / `BUILD_OPENCL`, and renderer sources. The project must build and run (CPU + text) with
-no CUDA toolkit and no OpenCL present.
+no CUDA toolkit and no OpenCL present. The `gol_gui` executable is gated on `BUILD_GUI` (finds Qt6); it
+always links the CPU engine, and when `BUILD_CUDA` is also on it builds the `gol_cudagl` interop bridge
+(nvcc), links the CUDA engine, and defines `GOL_HAVE_CUDA`.
 
 Layout (parenthesised notes are clarifications — header-only units, directory contents):
 
 ```
 include/gol/   Grid.hpp ISimEngine.hpp IRenderer.hpp Config.hpp LifeRules.hpp Timer.hpp
                engines/CpuEngine.hpp  render/NullRenderer.hpp render/TextRenderer.hpp render/AnsiRenderer.hpp
+               render/CudaGlInterop.hpp  gui/GolGlWidget.hpp gui/MainWindow.hpp
                patterns/Pattern.hpp patterns/RleLoader.hpp
 src/core/      Config.cpp main.cpp                         (Grid/LifeRules/Timer are header-only)
 src/engines/   cpu/CpuEngine.cpp  cuda/CudaEngine.cu cuda/kernel.cu  opencl/OpenCLEngine.cpp opencl/kernel.cl
 include/gol/engines/  CudaEngine.hpp  cuda/kernel.cuh  OpenCLEngine.hpp
 src/render/    TextRenderer.cpp AnsiRenderer.cpp           (NullRenderer is header-only)
+               CudaGlInterop.cu                            (CUDA<->GL bridge, nvcc; gol_cudagl lib)
+src/gui/       main_gui.cpp GolGlWidget.cpp MainWindow.cpp shaders/display.vert shaders/display.frag
 src/patterns/  Pattern.cpp RleLoader.cpp
 tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp cuda_equivalence_test.cpp opencl_equivalence_test.cpp
 patterns/      *.rle                                       (block, blinker, birth_on_six, highlife_replicator, highlife_spaceship)
 scripts/       sweep.sh sweep_gpu_opt.ps1 sweep_scaling.ps1 (CPU+CUDA+OpenCL sweeps; .ps1 are the Windows variants)
+               run_gui.sh                                  (launch gol_gui on the NVIDIA GPU for zero-copy interop)
 results/       sweep_gpu_opt.csv sweep_scaling.csv          (Windows baseline, BOM); linux/ holds the Linux re-run
 analysis/      results.ipynb                               (loads results/linux/, writes report/img/bench_*.png)
 ```

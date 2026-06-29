@@ -78,4 +78,10 @@ void CudaEngine::download(Grid& out) {
             "cudaMemcpy(D2H download)");
 }
 
+void CudaEngine::pokeCell(std::size_t x, std::size_t y, unsigned char value) {
+  if (!dCur_ || x >= cols_ || y >= rows_) return;
+  cudaCheck(cudaMemcpy(dCur_ + y * cols_ + x, &value, 1, cudaMemcpyHostToDevice),
+            "cudaMemcpy(pokeCell)");
+}
+
 } // namespace gol
