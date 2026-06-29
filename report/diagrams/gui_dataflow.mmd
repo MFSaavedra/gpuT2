@@ -1,0 +1,29 @@
+%% Tarea 3 -- the two presentation paths of gol_gui (CUDA engine).
+%% Solid edges stay on the GPU (zero-copy interop); dashed edges cross PCIe
+%% (host-upload fallback). Render with mermaid-cli (mmdc):
+%%   mmdc -i report/diagrams/gui_dataflow.mmd -o report/img/gui_dataflow.svg \
+%%        -p report/diagrams/puppeteer.json -c report/diagrams/mermaid-config.json -b white -t neutral
+%%   rsvg-convert -f pdf -o report/img/gui_dataflow.pdf report/img/gui_dataflow.svg
+%%   mmdc -i report/diagrams/gui_dataflow.mmd -o report/img/gui_dataflow.png \
+%%        -p report/diagrams/puppeteer.json -c report/diagrams/mermaid-config.json -b white -t neutral -s 3
+flowchart LR
+  subgraph gpu["NVIDIA GPU memory"]
+    dcur["CudaEngine dCur_<br/>(current generation)"]
+    pbo["GL PBO<br/>(registered with CUDA)"]
+    tex["GL R8UI texture"]
+  end
+  subgraph host["Host RAM"]
+    grid["Grid bytes (grid_)"]
+  end
+  frag["Fragment shader<br/>colours cells, draws to screen"]
+
+  dcur -- "interop: device to device (on-GPU)" --> pbo
+  pbo -- "glTexSubImage2D (on-GPU)" --> tex
+  dcur -. "host-upload: download() D2H over PCIe" .-> grid
+  grid -. "glTexSubImage2D H2D over PCIe" .-> tex
+  tex --> frag
+
+  classDef zc fill:#e7f5e7,stroke:#2e7d32;
+  classDef hu fill:#fdeaea,stroke:#c62828;
+  class dcur,pbo,tex zc;
+  class grid hu;

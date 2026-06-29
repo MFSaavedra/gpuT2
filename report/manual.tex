@@ -71,6 +71,11 @@
 	$\text{Mcells/s} = (\text{rows}\times\text{cols}\times\text{gens}) /
 	(t \times 10^{6})$, measured against a no-op renderer so that rendering
 	and host\,$\leftrightarrow$\,device transfers never pollute the number.
+	A final section documents the real-time \textbf{Qt\,+\,OpenGL viewer}
+	(\texttt{gol\_gui}) built on top of the same engines, which displays the
+	GPU-computed board through \textbf{CUDA\,$\leftrightarrow$\,OpenGL interop}
+	(zero host round trip), with a host-upload fallback that also lets it run on
+	the CPU engine with no CUDA toolkit present.
 \end{abstractd}
 
 % TABLA DE CONTENIDOS - ÍNDICE
@@ -162,12 +167,17 @@ the per-generation compute --- sits behind \texttt{ISimEngine}; output sits
 behind \texttt{IRenderer}; the application owns the loop and wires one of each at
 runtime from the parsed configuration.
 
-\begin{sourcecode}{plaintext}{The strategy layout. Parenthesised entries are planned (only GuiRenderer).}
+\begin{sourcecode}{plaintext}{The strategy layout of the headless app.}
 Application (main.cpp)  -- owns the loop + Config/CLI
   |-- ISimEngine   <- CpuEngine | CudaEngine | OpenCLEngine
-  |-- IRenderer    <- NullRenderer | TextRenderer | AnsiRenderer | (GuiRenderer later)
+  |-- IRenderer    <- NullRenderer | TextRenderer | AnsiRenderer
   '-- Grid + Pattern  (shared, backend-agnostic state & seed data)
 \end{sourcecode}
+
+The real-time Qt\,+\,OpenGL viewer (\texttt{gol\_gui}) reuses the same
+\texttt{ISimEngine} backends but is a \emph{separate} front-end rather than an
+\texttt{IRenderer} --- Qt owns its event loop and the display path avoids the host
+\texttt{Grid} entirely. It is documented on its own in Section~\ref{sec:gui}.
 
 The dependency arrows point \emph{from} engines \emph{to} the core, never back ---
 that one-directional dependency is what keeps the core backend-agnostic and lets a
@@ -237,7 +247,16 @@ and impose no link dependency.
 		\texttt{src/patterns/Pattern.cpp}        & Stamping a pattern onto a grid & \ref{sec:patterns} \\
 		\texttt{src/render/TextRenderer.cpp}     & ASCII frame dump & \ref{sec:render} \\
 		\texttt{src/render/AnsiRenderer.cpp}     & In-place ANSI animation & \ref{sec:render} \\
-		\texttt{CMakeLists.txt}                  & Build, GPU opt-in gating & \ref{sec:cmake} \\
+		\texttt{include/gol/render/CudaGlInterop.hpp} & CUDA\,$\leftrightarrow$\,GL bridge decl. & \ref{sec:gui} \\
+		\texttt{src/render/CudaGlInterop.cu}     & CUDA\,$\leftrightarrow$\,GL bridge (nvcc) & \ref{sec:gui} \\
+		\texttt{include/gol/gui/GolGlWidget.hpp}  & Viewport widget declaration & \ref{sec:gui} \\
+		\texttt{src/gui/GolGlWidget.cpp}          & Viewport: engine + interop + input & \ref{sec:gui} \\
+		\texttt{include/gol/gui/MainWindow.hpp}   & Window + control panel decl. & \ref{sec:gui} \\
+		\texttt{src/gui/MainWindow.cpp}           & Window, panel, signal wiring & \ref{sec:gui} \\
+		\texttt{src/gui/main\_gui.cpp}            & Viewer entry point + CLI & \ref{sec:gui} \\
+		\texttt{src/gui/shaders/display.\{vert,frag\}} & Display shaders (read at runtime) & \ref{sec:gui} \\
+		\texttt{scripts/run\_gui.sh}              & Launch on the NVIDIA GPU (Optimus) & \ref{sec:gui} \\
+		\texttt{CMakeLists.txt}                  & Build, GPU/GUI opt-in gating & \ref{sec:cmake} \\
 		\texttt{tests/*.cpp}                     & Executable spec of the invariants & \ref{sec:tests} \\
 		\texttt{scripts/sweep.sh}                & Benchmark sweeps $\to$ \texttt{results/*.csv} & \ref{sec:timing} \\
 		\texttt{analysis/results.ipynb}          & Plots the sweeps (Spanish) & \ref{sec:timing} \\
@@ -1307,6 +1326,363 @@ the animation is watchable; it lives only in this renderer, never in the timed
 path. The size query is POSIX (\texttt{ioctl(TIOCGWINSZ)}); off a TTY it falls
 back to $80\times24$.
 
+\section{The Game of Life viewer --- Qt\,+\,OpenGL with CUDA interop}
+\label{sec:gui}
+
+The viewer (\texttt{gol\_gui}) is the project's answer to Tarea 3 (``Interop --
+Shaders''): a real-time window that animates the \emph{same} simulation the
+headless \texttt{gol} benchmarks. Its reason to exist is one idea --- display the
+GPU-computed board \emph{without copying it back to the host}. The compute API
+(CUDA) and the graphics API (OpenGL) share one device buffer, so the board is
+born, stepped, and drawn entirely in GPU memory; only keystrokes cross the PCIe
+bus. Everything else in this section follows from making that sharing work, and
+from degrading gracefully to a plain host copy when it cannot.
+
+\subsection{Why it is a separate front-end, not an \texttt{IRenderer}}
+
+It would be natural to add a \texttt{GuiRenderer} alongside \texttt{TextRenderer}
+and \texttt{AnsiRenderer}. That does not work, for two structural reasons. First,
+\textbf{Qt owns the loop}: \texttt{QApplication::exec()} \emph{is} the event loop
+and calls back into the widget (via \texttt{paintGL} and timers), so the
+application cannot keep \texttt{main.cpp}'s \texttt{for (gen\dots)\{ step; render \}}
+loop. Second, \texttt{IRenderer::render(const Grid\&, gen)} takes a \emph{host}
+\texttt{Grid} --- exactly the host copy interop exists to avoid. So the viewer is a
+\textbf{peer front-end} on the same core, not a renderer plugged into the old
+loop: it is its own executable (\texttt{gol\_gui}), gated on \texttt{BUILD\_GUI},
+and the headless \texttt{gol} never links Qt or OpenGL.
+
+\subsection{Components and the strategy it composes}
+
+Figure~\ref{fig:gui-arch} shows the pieces. \texttt{MainWindow} (a
+\texttt{QMainWindow}) holds the central \texttt{GolGlWidget} and a dockable control
+panel, wired with Qt signals/slots. \texttt{GolGlWidget} (a \texttt{QOpenGLWidget})
+is the heart: it owns an \texttt{ISimEngine} (the unchanged CPU or CUDA engine),
+a \texttt{CudaGlInterop} bridge, the host \texttt{Grid} used for seeding and for
+the host-upload path, and a snapshot \texttt{initialGrid\_} for Reset. The widget
+thus \emph{composes} the existing strategy interface rather than extending it.
+
+\insertimage{gui_architecture}{height=0.78\textheight,keepaspectratio}{Components of the viewer.
+\texttt{MainWindow} owns \texttt{GolGlWidget}; the widget drives an
+\texttt{ISimEngine} (\texttt{CpuEngine} or \texttt{CudaEngine}) and, for the
+zero-copy path, a \texttt{CudaGlInterop} bridge that copies the engine's current
+device buffer into a GL buffer. \texttt{CpuEngine} and \texttt{CudaEngine} both
+realize \texttt{ISimEngine}; only \texttt{CudaEngine} exposes
+\texttt{currentDeviceBuffer()}. \label{fig:gui-arch}}
+
+Two small, additive changes to the engine layer make this composition possible.
+\texttt{ISimEngine} gains an optional \texttt{pokeCell} for live editing,
+defaulting to a no-op so backends that do not support it (e.g. OpenCL) degrade
+silently:
+
+\begin{sourcecode}{cpp}{include/gol/ISimEngine.hpp --- optional live editing; default no-op.}
+virtual void pokeCell(std::size_t x, std::size_t y, unsigned char value) {
+  (void)x; (void)y; (void)value;   // backends that support it override this
+}
+\end{sourcecode}
+
+\texttt{CpuEngine} overrides it with a one-line in-place write to its \texttt{cur\_}
+buffer; \texttt{CudaEngine} overrides it with a one-byte \texttt{cudaMemcpy}, and
+also exposes the device pointer the interop bridge needs. The header stays
+CUDA-free (the pointer is returned as \texttt{const void*}):
+
+\begin{sourcecode}{cuda}{CudaEngine: a device-pointer accessor and a 1-byte editor.}
+// include/gol/engines/CudaEngine.hpp -- header stays free of CUDA types.
+const void* currentDeviceBuffer() const { return dCur_; }
+void pokeCell(std::size_t x, std::size_t y, unsigned char value) override;
+
+// src/engines/cuda/CudaEngine.cu
+void CudaEngine::pokeCell(std::size_t x, std::size_t y, unsigned char value) {
+  if (!dCur_ || x >= cols_ || y >= rows_) return;
+  cudaMemcpy(dCur_ + y * cols_ + x, &value, 1, cudaMemcpyHostToDevice);
+}
+\end{sourcecode}
+
+\subsection{The interop bridge --- \texttt{CudaGlInterop}}
+\label{sec:gui-bridge}
+
+The bridge is the only place that touches both APIs, so it is isolated in a
+\texttt{.cu} (compiled by nvcc, which sees \texttt{cuda\_gl\_interop.h}) behind a
+CUDA-free header (so the Qt widget compiles with the host compiler). The contract
+is the classic interop dance: \textbf{register once}, then \textbf{per frame}
+map\,$\rightarrow$\,write\,$\rightarrow$\,unmap. Registering tells the driver that
+a GL buffer and a CUDA resource are the same memory; mapping hands ownership to
+CUDA so neither API touches it mid-operation.
+
+\begin{sourcecode}{cuda}{src/render/CudaGlInterop.cu --- register once, then copy each frame.}
+void CudaGlInterop::registerBuffer(unsigned int glBufferId, std::size_t bytes) {
+  // WriteDiscard: CUDA overwrites the whole buffer each frame, so the driver
+  // need not preserve its previous contents.
+  cudaGraphicsGLRegisterBuffer(&res, glBufferId, cudaGraphicsRegisterFlagsWriteDiscard);
+  resource_ = res; bytes_ = bytes;
+}
+
+void CudaGlInterop::copyFromDevice(const void* deviceSrc) {
+  cudaGraphicsMapResources(1, &res, 0);                     // GL -> CUDA
+  cudaGraphicsResourceGetMappedPointer(&dPtr, &mapped, res);
+  cudaMemcpy(dPtr, deviceSrc, bytes_, cudaMemcpyDeviceToDevice); // stays on the GPU
+  cudaGraphicsUnmapResources(1, &res, 0);                   // CUDA -> GL
+}
+\end{sourcecode}
+
+The decisive line is the \texttt{cudaMemcpyDeviceToDevice}: \texttt{deviceSrc} is
+the engine's \texttt{dCur\_} and \texttt{dPtr} is the GL buffer's memory, both on
+the same GPU, so the copy never leaves the device. This is what ``zero-copy''
+means here --- zero copies across PCIe, not zero copies at all (the on-GPU D2D
+copy runs at hundreds of GB/s). Keeping the engine's ping-pong intact and copying
+\emph{out} of it, rather than letting \texttt{step} write straight into the GL
+buffer, is deliberate: the engine's contract (Section~\ref{sec:interfaces}) is
+untouched, and the viewer only ever \emph{reads} the current buffer.
+
+\subsection{Widget lifecycle --- \texttt{initializeGL}}
+
+\texttt{initializeGL} runs once, with the GL context current (the only safe place
+to register a GL buffer with CUDA). It compiles the shaders, makes the GL objects
+the board needs --- a Pixel Buffer Object (PBO) that CUDA writes and GL reads,
+and a single-channel unsigned-integer texture (\texttt{GL\_R8UI}, one texel per
+cell) --- then builds the engine and tries to register the PBO.
+
+\begin{sourcecode}{cpp}{src/gui/GolGlWidget.cpp --- the PBO and the integer board texture.}
+glGenBuffers(1, &pbo_);
+glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_);
+glBufferData(GL_PIXEL_UNPACK_BUFFER, bytes, nullptr, GL_DYNAMIC_COPY);
+
+glGenTextures(1, &tex_);
+glBindTexture(GL_TEXTURE_2D, tex_);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); // integer tex: no filtering
+glTexImage2D(GL_TEXTURE_2D, 0, GL_R8UI, cols, rows, 0,
+             GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+\end{sourcecode}
+
+A \texttt{GL\_R8UI} texture is the right type for a board: it stores the cell byte
+exactly and is read in the shader with an integer sampler (\texttt{usampler2D})
+and \texttt{texelFetch}, with no filtering --- integer textures cannot be linearly
+filtered, and we want crisp cells anyway. The presentation path is then chosen:
+default to host-upload (works on any context), and attempt interop only for a
+\texttt{CudaEngine}, falling back rather than failing if the GL context is on a
+different GPU than CUDA:
+
+\begin{sourcecode}{cpp}{Choosing the presentation path -- interop with a graceful fallback.}
+present_ = Present::HostUpload;               // works on any GL context
+if (cudaEngine_) {                            // a CUDA engine? try zero-copy
+  try {
+    interop_.registerBuffer(pbo_, bytes);
+    present_ = Present::Interop;
+  } catch (const std::exception& e) {         // e.g. GL on the Intel iGPU
+    // log "interop unavailable on <GL_RENDERER>; falling back to host-upload"
+    present_ = Present::HostUpload;
+  }
+}
+\end{sourcecode}
+
+\subsection{Two presentation paths --- zero-copy vs host-upload}
+\label{sec:gui-paths}
+
+Figure~\ref{fig:gui-dataflow} contrasts the two paths the previous snippet selects
+between. In \textbf{Interop} mode the bridge copies \texttt{dCur\_} into the PBO
+(device-to-device), and \texttt{glTexSubImage2D} streams the PBO into the texture
+--- both on the GPU. In \textbf{HostUpload} mode the engine's
+\texttt{download(grid\_)} pulls the board to host RAM (a D2H \texttt{cudaMemcpy}
+for CUDA, a plain copy for the CPU engine), and \texttt{glTexSubImage2D} uploads
+it from client memory --- two PCIe crossings. The CPU engine has no device buffer,
+so it always uses the host-upload path; the CUDA engine uses interop when the GL
+context is on the NVIDIA GPU and host-upload otherwise.
+
+\insertimage{gui_dataflow}{width=\linewidth}{The two presentation paths (CUDA
+engine). Solid (green) edges stay in GPU memory --- the zero-copy interop path,
+\texttt{dCur\_}\,$\rightarrow$\,PBO\,$\rightarrow$\,texture. Dashed (red) edges
+cross PCIe --- the host-upload fallback, \texttt{dCur\_}\,$\rightarrow$\,host
+\texttt{grid\_}\,$\rightarrow$\,texture. The CPU engine always takes the dashed
+path (its board already lives in host RAM). \label{fig:gui-dataflow}}
+
+\subsection{The frame: present, then step}
+\label{sec:gui-frame}
+
+\texttt{paintGL} draws one frame. The order matters: it \textbf{presents the
+current board first, then advances}. The obvious order (step, then present) has a
+subtle bug for interactive editing --- a cell painted between frames would be
+consumed by \texttt{step} before it was ever drawn, so a lone live cell (which dies
+immediately under \texttt{B36/S23}, needing two or three neighbours) would seem to
+vanish while still perturbing nearby patterns. Presenting first means every edit
+is visible for the frame it was made, and only then evolves.
+
+\begin{sourcecode}{cpp}{src/gui/GolGlWidget.cpp --- present the current board, then advance.}
+// Move the CURRENT board into the texture (interop or host-upload).
+glBindTexture(GL_TEXTURE_2D, tex_);
+if (present_ == Present::Interop && cudaEngine_) {
+  interop_.copyFromDevice(cudaEngine_->currentDeviceBuffer());   // D2D into the PBO
+  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo_);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0,0, cols, rows, GL_RED_INTEGER, GL_UNSIGNED_BYTE, nullptr);
+} else {
+  engine_->download(grid_);                                      // D2H (or host copy)
+  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, 0,0, cols, rows, GL_RED_INTEGER, GL_UNSIGNED_BYTE, grid_.data());
+}
+// ... draw the fullscreen triangle, emit HUD stats ...
+
+// Advance for the NEXT frame; --gens N auto-pauses on reaching the cap.
+if (playing_ && engine_)
+  for (int i = 0; i < speed_; ++i) {
+    engine_->step(); ++generation_;
+    if (cfg_.generations > 0 && generation_ >= cfg_.generations) { playing_ = false; break; }
+  }
+\end{sourcecode}
+
+\subsection{The shaders}
+\label{sec:gui-shaders}
+
+The board is drawn as a textured \textbf{fullscreen triangle}: a single oversized
+triangle covers the screen with one draw call and \emph{no vertex buffer} --- the
+three positions come from \texttt{gl\_VertexID}. This is the standard way to run a
+fragment shader over every pixel.
+
+\begin{sourcecode}{glsl}{src/gui/shaders/display.vert --- fullscreen triangle, no VBO.}
+void main() {
+    vec2 v[3] = vec2[3](vec2(-1.0,-1.0), vec2(3.0,-1.0), vec2(-1.0,3.0));
+    gl_Position = vec4(v[gl_VertexID], 0.0, 1.0);
+}
+\end{sourcecode}
+
+The fragment shader maps each screen pixel to a board cell (inverting the same
+zoom/pan transform the CPU uses for mouse picking), fetches the cell, and colours
+it. Zoom is pixels-per-cell (\texttt{uScale}); pan is the board cell shown at the
+screen centre (\texttt{uCenter}); a colour-mode uniform selects a flat
+alive/dead palette or a live-neighbour-count ramp (the latter samples the eight
+neighbours straight from the texture --- free, no extra buffer).
+
+\begin{sourcecode}{glsl}{src/gui/shaders/display.frag --- screen pixel to cell, then colour.}
+uniform usampler2D uBoard;     // GL_R8UI: one texel per cell (0/1)
+uniform vec2  uViewSize;       // framebuffer size in px
+uniform float uScale;          // pixels per cell (zoom)
+uniform vec2  uCenter;         // board cell at the screen centre (pan)
+
+void main() {
+    vec2 screen = gl_FragCoord.xy;
+    screen.y = uViewSize.y - screen.y;                         // flip: row 0 at top
+    ivec2 cell = ivec2(floor(uCenter + (screen - 0.5 * uViewSize) / uScale));
+    // ... out-of-board -> background colour ...
+    uint alive = texelFetch(uBoard, cell, 0).r;
+    fragColor = (alive == 1u) ? vec4(0.85, 0.95, 0.85, 1.0)
+                              : vec4(0.10, 0.10, 0.12, 1.0);
+}
+\end{sourcecode}
+
+The shaders are GLSL \texttt{\#version 330} core --- the viewer uses nothing past
+GL 3.3 (integer textures, \texttt{texelFetch}, VAOs), so 3.3 maximises the range
+of drivers it runs on. They are \textbf{read at runtime} from
+\texttt{src/gui/shaders/} (the path baked in at configure time), mirroring how the
+OpenCL backend loads \texttt{kernel.cl} --- editable without recompiling.
+
+\subsection{Interaction --- picking, painting, panning, zoom, reset}
+\label{sec:gui-input}
+
+Mouse picking is the inverse of the shader's pixel\,$\rightarrow$\,cell map, so
+what the cursor points at is exactly what the shader drew there. Left-drag paints
+(Shift erases) via \texttt{pokeCell}; middle/right-drag pans; the wheel zooms about
+the cursor.
+
+\begin{sourcecode}{cpp}{src/gui/GolGlWidget.cpp --- widget pixel to cell, and painting.}
+QPointF GolGlWidget::screenToBoard(QPointF pos) const {       // inverse of the shader map
+  const double dpr = devicePixelRatioF();
+  return QPointF(center_.x() + (pos.x()*dpr - 0.5*width()*dpr)  / scale_,
+                 center_.y() + (pos.y()*dpr - 0.5*height()*dpr) / scale_);
+}
+void GolGlWidget::paintAt(QPointF pos, unsigned char value) {
+  const QPointF b = screenToBoard(pos);
+  engine_->pokeCell((size_t)std::floor(b.x()), (size_t)std::floor(b.y()), value);
+  update();
+}
+\end{sourcecode}
+
+\textbf{Reset} restores the board to generation 0 of the current pattern. It needs
+its own snapshot because \texttt{grid\_} is reused as the host-upload scratch
+buffer and is overwritten every frame; so a separate \texttt{initialGrid\_} is
+captured at each generation-0 event (initial seed, \texttt{reseed}, \texttt{clear},
+and \texttt{loadRle}) and restored on demand --- so re-watching the same RLE costs
+a keystroke, not a re-open.
+
+\begin{sourcecode}{cpp}{src/gui/GolGlWidget.cpp --- snapshot-based reset.}
+// initialGrid_ is set to grid_ at every generation-0 event.
+void GolGlWidget::resetToInitial() {
+  grid_ = initialGrid_;      // restore the snapshot
+  engine_->upload(grid_);    // re-seed the engine
+  generation_ = 0;
+}
+\end{sourcecode}
+
+Patterns load through the existing \texttt{RleLoader}\,/\,\texttt{Pattern} pipeline
+(Section~\ref{sec:patterns}): \texttt{--rle PATH} seeds at startup, and an
+\textbf{Open RLE\dots} button opens a \texttt{QFileDialog} that stamps a pattern
+centred at runtime. The control panel's buttons and sliders are plain Qt widgets
+connected to the widget's public slots with \texttt{connect(\dots)}; a per-frame
+\texttt{statsChanged} signal updates the generation/FPS/zoom labels, and a
+one-shot \texttt{backendInfo} signal puts the active engine and present mode in
+the window title.
+
+\subsection{Portability, the Optimus caveat, and the launch wrapper}
+\label{sec:gui-portability}
+
+Because the CPU engine uses the host-upload path, \texttt{gol\_gui} builds and runs
+\textbf{with no CUDA toolkit at all}; CUDA only adds the zero-copy path. This is
+the main portability win, and it is reflected in the build wiring
+(Section~\ref{sec:cmake}, Figure~\ref{fig:gui-arch}).
+
+One environment caveat is worth recording because it is not obvious. The
+development machine is an \textbf{Optimus} laptop (NVIDIA dGPU + Intel iGPU), and
+on it OpenGL defaults to the \emph{Intel} iGPU. Interop requires the GL context
+and CUDA to be on the \emph{same} GPU, so on a default context
+\texttt{cudaGraphicsGLRegisterBuffer} fails --- which is exactly the
+fallback-to-host-upload case above (the viewer still runs, just with the PCIe
+round trip). To get the zero-copy path, the GL context must be placed on the
+NVIDIA GPU with PRIME render offload; \texttt{scripts/run\_gui.sh} does this:
+
+\begin{sourcecode}{bash}{scripts/run\_gui.sh --- put the GL context on the NVIDIA GPU (Optimus).}
+exec env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
+         QT_QPA_PLATFORM=xcb "$bin" "$@"
+\end{sourcecode}
+
+\texttt{QT\_QPA\_PLATFORM=xcb} routes through Xwayland so the GLX offload variables
+apply on a Wayland session. On a single-GPU desktop none of this is needed --- a
+bare \texttt{./gol\_gui} already gets an NVIDIA (or AMD/Intel) context and the
+right path is chosen automatically.
+
+\subsection{Build wiring and the command line}
+\label{sec:gui-build}
+
+\texttt{gol\_gui} is gated on \texttt{BUILD\_GUI} and is independent of
+\texttt{BUILD\_CUDA}: it always links the core and the CPU engine, and only when
+the CUDA engine is configured does it also build the \texttt{gol\_cudagl} interop
+bridge (nvcc), link the CUDA engine, and define \texttt{GOL\_HAVE\_CUDA} (which
+guards every CUDA reference in the widget).
+
+\begin{sourcecode}{cmake}{CMakeLists.txt --- the viewer target; CUDA is optional.}
+option(BUILD_GUI "Build the Qt OpenGL viewer" OFF)
+if(BUILD_GUI)
+  find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
+  set(_gui_libs gol_core gol_cpu
+                Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets)
+  if(GOL_CUDA_ENABLED)                                   # zero-copy path, optional
+    find_package(CUDAToolkit REQUIRED)
+    add_library(gol_cudagl src/render/CudaGlInterop.cu)  # compiled by nvcc
+    list(APPEND _gui_libs gol_cuda gol_cudagl CUDA::cudart)
+    list(APPEND _gui_defs GOL_HAVE_CUDA)
+  endif()
+  add_executable(gol_gui src/gui/main_gui.cpp src/gui/GolGlWidget.cpp
+                 src/gui/MainWindow.cpp <headers for AUTOMOC>)
+  set_target_properties(gol_gui PROPERTIES AUTOMOC ON)
+  target_link_libraries(gol_gui PRIVATE ${_gui_libs})
+endif()
+\end{sourcecode}
+
+The \texttt{Q\_OBJECT} headers live apart from their \texttt{.cpp} (in
+\texttt{include/gol/gui/}), so they are listed explicitly in the target for AUTOMOC
+to scan --- it only auto-pairs same-directory basenames. The CLI mirrors the
+headless \texttt{gol} flags that define \emph{what} to simulate
+(\texttt{--rows}/\texttt{--cols}/\texttt{--gens}/\texttt{--threads}/\texttt{--wrap}/%
+\texttt{--seed}/\texttt{--rle}/\texttt{--engine cpu|cuda}/\texttt{--block}, plus a
+\texttt{COLSxROWS} shorthand); the headless-only flags (\texttt{--renderer},
+\texttt{--csv}, \texttt{--verify}) do not apply, and \texttt{--gens} becomes an
+interactive auto-pause rather than an exit condition.
+
 \section{Build system --- \texttt{CMakeLists.txt}}
 \label{sec:cmake}
 
@@ -1498,11 +1874,18 @@ CPU engine is the reference oracle. The benchmark sweeps (\texttt{scripts/sweep.
 now CPU + CUDA + OpenCL), the results CSVs, the analysis notebook
 (\texttt{analysis/results.ipynb}), and the Nsight (\texttt{ncu}/\texttt{nsys})
 profiling of the best CUDA kernel are also done and populate \texttt{main.tex}.
+The interactive \textbf{Qt\,+\,OpenGL viewer} (\texttt{gol\_gui}) is also done
+(Section~\ref{sec:gui}): CUDA\,$\leftrightarrow$\,OpenGL zero-copy interop with a
+host-upload fallback, the CPU engine supported with no CUDA toolkit, live
+paint/zoom/pan, RLE loading, and reset.
 
 \paragraph{Pending / future work.} All three backends are implemented, verified
 against the CPU oracle (including \texttt{gol\_opencl\_tests}) and benchmarked --- the
-OpenCL results are folded into the report alongside CUDA. What is left is optional: a
-\texttt{GuiRenderer} (the one planned-but-absent strategy), and the performance ideas
+OpenCL results are folded into the report alongside CUDA. The interactive viewer
+realizes what used to be the ``planned \texttt{GuiRenderer}'', though as a separate
+front-end rather than an \texttt{IRenderer} (Section~\ref{sec:gui} explains why). What
+is left is optional: shader-side visualisation extensions (age/heat colouring, a
+population plot, a 3-D height field via a geometry shader), and the performance ideas
 the report raises (a vectorised AVX2 CPU path; more instruction-level parallelism per
 GPU thread to hide load latency). Nsight Compute profiles only CUDA, so OpenCL relies
 on its in-program queue-event timing.

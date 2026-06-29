@@ -1,0 +1,55 @@
+%% Tarea 3 -- Qt + OpenGL viewer (gol_gui): components & strategy.
+%% Render with mermaid-cli (mmdc), same flags as architecture.mmd:
+%%   mmdc -i report/diagrams/gui_architecture.mmd -o report/img/gui_architecture.svg \
+%%        -p report/diagrams/puppeteer.json -c report/diagrams/mermaid-config.json -b white -t neutral
+%%   rsvg-convert -f pdf -o report/img/gui_architecture.pdf report/img/gui_architecture.svg
+%%   mmdc -i report/diagrams/gui_architecture.mmd -o report/img/gui_architecture.png \
+%%        -p report/diagrams/puppeteer.json -c report/diagrams/mermaid-config.json -b white -t neutral -s 3
+classDiagram
+  direction TB
+
+  class MainWindow {
+    <<QMainWindow>>
+    -view_ GolGlWidget
+    +panel: play/pause, step, reset, reseed
+    +panel: clear, Open RLE, speed, colour, wrap
+  }
+  class GolGlWidget {
+    <<QOpenGLWidget>>
+    -engine_ ISimEngine
+    -interop_ CudaGlInterop
+    -grid_ Grid
+    -initialGrid_ Grid
+    -present_ Present
+    +initializeGL()
+    +paintGL()
+    +loadRle(path)
+    +resetToInitial()
+  }
+  class ISimEngine {
+    <<interface>>
+    +step() void
+    +download(Grid) void
+    +pokeCell(x, y, v) void
+  }
+  class CpuEngine {
+    +step()
+    +pokeCell()
+  }
+  class CudaEngine {
+    +currentDeviceBuffer() devptr
+    +pokeCell()
+  }
+  class CudaGlInterop {
+    -resource_ handle
+    +registerBuffer(glId, bytes)
+    +copyFromDevice(devSrc)
+  }
+
+  ISimEngine <|.. CpuEngine
+  ISimEngine <|.. CudaEngine
+
+  MainWindow --> GolGlWidget : central widget + signals/slots
+  GolGlWidget --> ISimEngine : drives (CPU or CUDA)
+  GolGlWidget --> CudaGlInterop : zero-copy present
+  CudaGlInterop ..> CudaEngine : copies currentDeviceBuffer()
