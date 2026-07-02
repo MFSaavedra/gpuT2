@@ -1,0 +1,12 @@
+#N R-pentomino
+#C A rule-difference demonstrator, like birth_on_six.rle -- but in the opposite
+#C direction. Under vanilla Conway (B3/S23) the R-pentomino is the famous
+#C methuselah that runs 1103 generations before stabilising. Under OUR variant
+#C rule (B36/S23) it instead dies out almost immediately: verified with Golly's
+#C bgolly, the 5-cell seed is extinct (population 0) by generation ~7. The
+#C extra birth-on-6 rule reshapes the early chaos into a self-annihilating
+#C configuration. Handy to show that HighLife is NOT Conway even for a pattern
+#C that uses no birth-on-6 in its seed:
+#C   ./gol -r 32 -c 32 -g 12 --renderer text --rle patterns/r_pentomino.rle
+x = 3, y = 3, rule = B36/S23
+b2o$2o$bo!

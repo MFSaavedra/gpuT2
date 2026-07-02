@@ -1,0 +1,10 @@
+#N Glider
+#C The classic 5-cell diagonal spaceship. It only ever needs birth-on-3, so it
+#C behaves identically under the variant rule (B36/S23) as under vanilla Conway:
+#C it never presents a dead cell with exactly 6 live neighbours. Verified with
+#C Golly's bgolly under B36/S23 -- population stays 5 while it glides one cell
+#C diagonally every 4 generations (period 4, speed c/4). Useful as a minimal
+#C moving fixture, e.g. to watch --wrap (toroidal) motion:
+#C   ./gol -r 32 -c 32 -g 128 --wrap --rle patterns/glider.rle
+x = 3, y = 3, rule = B36/S23
+bo$2bo$3o!

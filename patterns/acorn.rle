@@ -1,0 +1,13 @@
+#N Acorn
+#O Charles Corderman
+#C A 7-cell methuselah: a tiny, sparse seed that grows chaotically for hundreds
+#C of generations before settling. Under our variant rule (B36/S23) it is a
+#C genuine methuselah -- verified with Golly's bgolly: population climbs to a
+#C peak near 83 cells around generation 200, then decays and stabilises at ~39
+#C cells (a mix of still lifes and oscillators) by about generation 600. The long
+#C chaotic transient makes it a good visual seed for the GUI viewer and a
+#C non-trivial fill for large-grid runs. Give it a wide margin so the growth
+#C does not hit the bounded edge, e.g.:
+#C   ./gol -r 256 -c 256 -g 600 --rle patterns/acorn.rle
+x = 7, y = 3, rule = B36/S23
+bo$3bo$2o2b3o!
