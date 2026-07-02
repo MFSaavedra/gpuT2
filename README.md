@@ -115,6 +115,28 @@ Intel iGPU and interop is unavailable). The CLI mirrors the headless flags
 (`--rows/--cols/--gens/--threads/--wrap/--seed/--rle/--engine cpu|cuda/--block`,
 plus a `COLSxROWS` shorthand); `--gens` becomes an interactive auto-pause.
 
+### Where it runs
+
+Developed and tested on an **Arch Linux** Optimus laptop (GTX 1660 Ti Max-Q + Intel
+UHD 630, NVIDIA proprietary driver, Wayland session). Two support tiers:
+
+* **Zero-copy interop path** (`scripts/run_gui.sh`, or
+  `QT_QPA_PLATFORM=xcb __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia
+  ./build/gol_gui`) — expected to work on any machine with an **NVIDIA proprietary
+  driver** (single-GPU or Optimus) and a CUDA build. It needs the GLVND `nvidia` GLX
+  vendor, an OpenGL 3.3 core context, and — on a **Wayland** session — **XWayland**
+  plus the Qt **xcb** platform plugin and its deps (e.g. `libxcb-cursor`), since the
+  script forces `QT_QPA_PLATFORM=xcb`. On a single-NVIDIA X11 box the PRIME vars are
+  no-ops and a bare launch already gets interop.
+* **Host-upload path** (`./build/gol_gui --engine cpu 512x512`) — portable: runs on
+  **any** Linux with Qt6 (Widgets/OpenGL/OpenGLWidgets) and an OpenGL 3.3 driver, with
+  no NVIDIA GPU and no CUDA toolkit. The viewer also falls back to this automatically
+  whenever interop registration fails.
+
+> **Do not use `run_gui.sh` on a non-NVIDIA machine** (AMD/Intel-only, or the nouveau
+> driver): it forces `__GLX_VENDOR_LIBRARY_NAME=nvidia`, so GL context creation fails
+> and the app exits before a window opens. Run the bare CPU command above instead.
+
 * **Display** — three colour modes (binary, live-neighbour count, and an *age
   heatmap* that colours a live cell by how many generations it has survived)
   through a selectable palette (**grayscale** by default, plus phosphor, amber,
