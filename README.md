@@ -1,7 +1,9 @@
-# GPU computation - Assignment 2
+# GPU computation - Assignments 2 & 3
 
 Conway's Game of Life on CPU, CUDA and OpenCL, benchmarked by cells evaluated
-per second to report the GPU speed-up over the CPU.
+per second to report the GPU speed-up over the CPU (Tarea 2), plus a real-time
+Qt + OpenGL viewer that displays the GPU-computed board through CUDA↔OpenGL
+interop with no host round trip (Tarea 3).
 
 The variant used here adds a third rule to the original game: a dead cell
 becomes alive if it has **exactly 6** live neighbours (in addition to the
@@ -22,8 +24,13 @@ rule **HighLife** (`B36/S23`), and it must hold identically in every backend.
   memory and a local-memory tiled variant via `--shared`). The kernel source
   `kernel.cl` is read at runtime and verified bit-for-bit against the CPU oracle
   (`--engine opencl --verify`). Opt in with `-DBUILD_OPENCL=ON`.
+* **Qt + OpenGL viewer (`gol_gui`)** — a real-time viewer for the same
+  simulation (Tarea 3, "Interop – Shaders"). It uses **CUDA↔OpenGL interop** to
+  display the GPU-computed board with no host round trip, and falls back to a
+  host-upload path for the CPU engine (so it builds with no CUDA toolkit). Opt in
+  with `-DBUILD_GUI=ON`; see **Viewer** below.
 
-All three backends run and verify against the CPU oracle. The CPU-vs-CUDA
+All three backends run and verify against the CPU oracle. The CPU/CUDA/OpenCL
 benchmark sweeps and the Nsight (`ncu`/`nsys`) profiling are done (Nsight Compute
 is CUDA-only); see **Benchmarking** and **Report** below.
 
@@ -84,15 +91,49 @@ pollutes the number; the binary reports both kernel and wall throughput.
 ./build/gol -r 22 -c 22 -g 12 --rle patterns/highlife_replicator.rle --renderer text
 ```
 
+## Viewer (Qt + OpenGL)
+
+`gol_gui` is a real-time viewer for the same simulation. It drives any engine and
+draws the board with an OpenGL fragment shader. With a CUDA engine on an NVIDIA GL
+context it uses **CUDA↔OpenGL interop** so the GPU-computed board is displayed
+without a host round trip (zero-copy); the CPU engine — and any context where
+interop is unavailable — falls back to a host-upload path, so the viewer builds and
+runs **with no CUDA toolkit**.
+
+Build it with `-DBUILD_GUI=ON` (needs Qt6: Widgets, OpenGL, OpenGLWidgets):
+
+```bash
+cmake -S . -B build -DBUILD_CUDA=ON -DBUILD_GUI=ON
+cmake --build build --target gol_gui
+./scripts/run_gui.sh 1024x1024 --rle patterns/highlife_c98_gun.rle  # NVIDIA GL context (zero-copy)
+./build/gol_gui --engine cpu 512x512                                # CPU engine, runs anywhere
+```
+
+`scripts/run_gui.sh` sets PRIME-offload env vars so the GL context lands on the
+NVIDIA GPU (this dev box is an Optimus laptop, where GL otherwise defaults to the
+Intel iGPU and interop is unavailable). The CLI mirrors the headless flags
+(`--rows/--cols/--gens/--threads/--wrap/--seed/--rle/--engine cpu|cuda/--block`,
+plus a `COLSxROWS` shorthand); `--gens` becomes an interactive auto-pause.
+
+* **Display** — three colour modes (binary, live-neighbour count, and an *age
+  heatmap* that colours a live cell by how many generations it has survived)
+  through a selectable palette (**grayscale** by default, plus phosphor, amber,
+  magma, ice). Grid lines appear around cells once zoomed in past ~4 px/cell.
+* **Controls** — wheel zoom, middle/right-drag pan, left-drag paint (Shift
+  erases). Keys: `space` play/pause, `S` step, `R` reseed, `C` clear, `I` reset to
+  generation 0, `F` fit view, `P` save a PNG screenshot of the view. A dockable
+  panel adds play/step/reset/reseed/clear, **Open RLE…**, Screenshot, and speed,
+  colour-mode, palette, and toroidal-edges controls.
+
 ## Benchmarking
 
 For parameter sweeps the binary has a CSV mode (`--csv` / `--csv-header`).
-`scripts/sweep.sh` drives the CPU-thread and CUDA block/shared sweeps into
-`results/*.csv`, and `analysis/results.ipynb` turns them into the report's
-figures:
+`scripts/sweep.sh` drives the CPU-thread and CUDA/OpenCL block/shared sweeps into
+`results/*.csv` (the Linux re-run used for the report lives in `results/linux/`),
+and `analysis/results.ipynb` turns them into the report's figures:
 
 ```bash
-./scripts/sweep.sh        # -> results/sweep_cuda_opt.csv, results/sweep_scaling.csv
+./scripts/sweep.sh        # -> results/sweep_gpu_opt.csv, results/sweep_scaling.csv
 ```
 
 ## Patterns
@@ -104,12 +145,19 @@ RLE seed patterns live in `patterns/`:
 | `block.rle` | 2x2 still life — survival rule, board never changes |
 | `blinker.rle` | period-2 oscillator |
 | `birth_on_six.rle` | a dead cell with exactly 6 live neighbours is born — the variant-only rule |
+| `glider.rle` | classic 5-cell diagonal spaceship (needs only birth-on-3, so it behaves identically here) |
+| `acorn.rle` | 7-cell methuselah — chaotic growth that peaks near gen 200 and settles by ~gen 600 |
+| `r_pentomino.rle` | Conway's famous 1103-gen methuselah, but under B36/S23 it dies out in ~7 gens (a rule-difference demo) |
 | `highlife_replicator.rle` | minimal 12-cell HighLife replicator (copies itself every 12 generations) |
 | `highlife_spaceship.rle` | a c/18 HighLife spaceship built from replicators (period 72) |
+| `highlife_c98_gun.rle` | a working HighLife glider gun firing c/98 orthogonal spaceships (583x546) |
 
-The two HighLife patterns were imported from Golly's library and verified
-bit-for-bit against its reference engine (`bgolly`), so they double as
-correctness oracles for the variant rule.
+The `highlife_*` patterns come from Golly's library, and those plus `glider`,
+`acorn`, and `r_pentomino` were cross-checked against Golly's reference engine
+(`bgolly`), which runs our exact rule (`B36/S23`) — so they double as correctness
+oracles for the variant rule (the first three are simple fixtures the unit tests
+cover). Note the Gosper glider gun is *not* included — birth-on-6 breaks it under
+this rule, so `highlife_c98_gun.rle` is the gun that actually works.
 
 ## Run tests
 
