@@ -1552,26 +1552,55 @@ void main() {
 The fragment shader maps each screen pixel to a board cell (inverting the same
 zoom/pan transform the CPU uses for mouse picking), fetches the cell, and colours
 it. Zoom is pixels-per-cell (\texttt{uScale}); pan is the board cell shown at the
-screen centre (\texttt{uCenter}); a colour-mode uniform selects a flat
-alive/dead palette or a live-neighbour-count ramp (the latter samples the eight
-neighbours straight from the texture --- free, no extra buffer).
+screen centre (\texttt{uCenter}). A \texttt{uColorMode} uniform selects one of three
+looks --- a flat alive/dead binary view, a live-neighbour-count ramp (samples the
+eight neighbours straight from the texture --- free, no extra buffer), or an
+\emph{age heatmap} that colours a live cell by how many generations it has survived
+--- and a \texttt{uPalette} uniform maps the resulting scalar $t\in[0,1]$ through
+one of five colour ramps (grayscale by default, plus phosphor, amber, magma, ice).
+The age value
+comes from a second \texttt{GL\_R8UI} texture (\texttt{uAge}); see below. Finally,
+once the zoom passes $\sim$4\,px/cell the shader darkens a $\sim$1\,px border around
+each cell (derived from \texttt{fract(boardF)}) so individual cells stay legible.
 
-\begin{sourcecode}{glsl}{src/gui/shaders/display.frag --- screen pixel to cell, then colour.}
+\begin{sourcecode}{glsl}{src/gui/shaders/display.frag --- pixel to cell, then mode + palette.}
 uniform usampler2D uBoard;     // GL_R8UI: one texel per cell (0/1)
-uniform vec2  uViewSize;       // framebuffer size in px
+uniform usampler2D uAge;       // GL_R8UI: per-cell generations survived (0 = dead)
 uniform float uScale;          // pixels per cell (zoom)
-uniform vec2  uCenter;         // board cell at the screen centre (pan)
+uniform int   uColorMode;      // 0 binary, 1 neighbours, 2 age heatmap
+uniform int   uPalette;        // 0 phosphor .. 4 ice (2 grayscale is the default)
+
+vec3 palette(int p, float t);  // t in [0,1] -> RGB ramp (five palettes)
 
 void main() {
-    vec2 screen = gl_FragCoord.xy;
-    screen.y = uViewSize.y - screen.y;                         // flip: row 0 at top
-    ivec2 cell = ivec2(floor(uCenter + (screen - 0.5 * uViewSize) / uScale));
-    // ... out-of-board -> background colour ...
-    uint alive = texelFetch(uBoard, cell, 0).r;
-    fragColor = (alive == 1u) ? vec4(0.85, 0.95, 0.85, 1.0)
-                              : vec4(0.10, 0.10, 0.12, 1.0);
+    // ... screen pixel -> ivec2 cell (as before); out-of-board -> background ...
+    vec3 col;
+    if (uColorMode == 2) {                                     // age heatmap
+        uint a = texelFetch(uAge, cell, 0).r;
+        col = (a == 0u) ? DEAD : palette(uPalette, float(a) / uAgeMax);
+    } else if (uColorMode == 1) {                              // neighbour count
+        int n = /* sum of the 8 neighbours via cellAt() */ 0;
+        col = palette(uPalette, float(n) / 8.0) * (alive == 1 ? 1.0 : 0.25);
+    } else {                                                   // binary
+        col = (alive == 1) ? palette(uPalette, 1.0) : DEAD;
+    }
+    if (uScale >= 4.0) {                                        // ~1px cell borders
+        vec2 d = min(fract(boardF), 1.0 - fract(boardF)) * uScale;
+        col *= mix(0.35, 1.0, smoothstep(0.0, 1.0, min(d.x, d.y)));
+    }
+    fragColor = vec4(col, 1.0);
 }
 \end{sourcecode}
+
+The age heatmap is the one mode that needs state beyond the current board. Rather than
+a GPU feedback pass, the widget keeps a host-side \texttt{age\_} byte per cell and
+updates it \textbf{once per generation} (\texttt{age = alive ? min(age+1,255) : 0}),
+uploading it to the \texttt{uAge} texture. The update is gated on the generation
+counter (so a paused or merely re-panned frame does not keep ageing cells) and runs
+\textbf{only while age mode is active} --- the binary and neighbour modes, and the
+CUDA interop zero-copy path, never pay for it. When the mode is on with a CUDA engine
+the widget does download the board each generation to drive the update; that is the
+one place the age view trades a copy for the extra channel of information.
 
 The shaders are GLSL \texttt{\#version 330} core --- the viewer uses nothing past
 GL 3.3 (integer textures, \texttt{texelFetch}, VAOs), so 3.3 maximises the range
@@ -1585,7 +1614,9 @@ OpenCL backend loads \texttt{kernel.cl} --- editable without recompiling.
 Mouse picking is the inverse of the shader's pixel\,$\rightarrow$\,cell map, so
 what the cursor points at is exactly what the shader drew there. Left-drag paints
 (Shift erases) via \texttt{pokeCell}; middle/right-drag pans; the wheel zooms about
-the cursor.
+the cursor. The \textbf{P} key saves a PNG of the current view to the working
+directory via \texttt{QOpenGLWidget::grabFramebuffer} --- handy for capturing report
+figures without an external screen-grabber.
 
 \begin{sourcecode}{cpp}{src/gui/GolGlWidget.cpp --- widget pixel to cell, and painting.}
 QPointF GolGlWidget::screenToBoard(QPointF pos) const {       // inverse of the shader map
@@ -1619,10 +1650,13 @@ void GolGlWidget::resetToInitial() {
 Patterns load through the existing \texttt{RleLoader}\,/\,\texttt{Pattern} pipeline
 (Section~\ref{sec:patterns}): \texttt{--rle PATH} seeds at startup, and an
 \textbf{Open RLE\dots} button opens a \texttt{QFileDialog} that stamps a pattern
-centred at runtime. The control panel's buttons and sliders are plain Qt widgets
-connected to the widget's public slots with \texttt{connect(\dots)}; a per-frame
-\texttt{statsChanged} signal updates the generation/FPS/zoom labels, and a
-one-shot \texttt{backendInfo} signal puts the active engine and present mode in
+centred at runtime. The control panel's buttons, sliders, and combo boxes are plain
+Qt widgets connected to the widget's public slots with \texttt{connect(\dots)} ---
+including a \textbf{Screenshot} button, a \emph{Colour} combo (binary / neighbour
+count / age heatmap) and a \emph{Palette} combo (grayscale by default, plus phosphor /
+amber / magma / ice). A per-frame \texttt{statsChanged} signal updates the generation/FPS/zoom
+labels, a \texttt{screenshotSaved} signal flashes the saved path in the status bar,
+and a one-shot \texttt{backendInfo} signal puts the active engine and present mode in
 the window title.
 
 \subsection{Portability, the Optimus caveat, and the launch wrapper}

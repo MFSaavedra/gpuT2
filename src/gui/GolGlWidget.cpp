@@ -14,6 +14,8 @@
 #include <string>
 
 #include <QCoreApplication>
+#include <QDateTime>
+#include <QImage>
 #include <QKeyEvent>
 #include <QMessageBox>
 #include <QMouseEvent>
@@ -60,6 +62,7 @@ GolGlWidget::~GolGlWidget() {
 #endif
   if (pbo_) glDeleteBuffers(1, &pbo_);
   if (tex_) glDeleteTextures(1, &tex_);
+  if (ageTex_) glDeleteTextures(1, &ageTex_);
   if (vao_) glDeleteVertexArrays(1, &vao_);
   if (prog_) glDeleteProgram(prog_);
   engine_.reset();
@@ -122,6 +125,9 @@ void GolGlWidget::initializeGL() {
   uBoard_ = glGetUniformLocation(prog_, "uBoardSize");
   uColorMode_ = glGetUniformLocation(prog_, "uColorMode");
   uTex_ = glGetUniformLocation(prog_, "uBoard");
+  uPalette_ = glGetUniformLocation(prog_, "uPalette");
+  uAgeMax_ = glGetUniformLocation(prog_, "uAgeMax");
+  uAge_ = glGetUniformLocation(prog_, "uAge");
 
   glGenVertexArrays(1, &vao_); // core profile needs a bound VAO even with no attributes
 
@@ -145,6 +151,20 @@ void GolGlWidget::initializeGL() {
                static_cast<GLsizei>(cfg_.rows), 0, GL_RED_INTEGER,
                GL_UNSIGNED_BYTE, nullptr);
   glBindTexture(GL_TEXTURE_2D, 0);
+
+  // Age texture (R8UI): per-cell generations-survived, sampled by the age heatmap.
+  // Same geometry/params as the board; filled host-side from age_ (see paintGL).
+  glGenTextures(1, &ageTex_);
+  glBindTexture(GL_TEXTURE_2D, ageTex_);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R8UI, static_cast<GLsizei>(cfg_.cols),
+               static_cast<GLsizei>(cfg_.rows), 0, GL_RED_INTEGER,
+               GL_UNSIGNED_BYTE, nullptr);
+  glBindTexture(GL_TEXTURE_2D, 0);
+  age_.assign(grid_.size(), 0);
 
   // Build the engine. The CUDA context (if any) is initialised here.
   try {
@@ -278,6 +298,34 @@ void GolGlWidget::paintGL() {
     }
   }
 
+  // Age heatmap: keep a host-side per-cell "generations survived" buffer. Update it
+  // once per generation (ageGen_ tracks the last board it saw), so pausing does not
+  // keep ageing cells and a re-presented frame is free. Only runs in age mode, so the
+  // other modes never pay for it -- and the interop path stays zero-copy elsewhere.
+  if (colorMode_ == 2) {
+    if (!ageInit_ || ageGen_ != generation_) {
+#ifdef GOL_HAVE_CUDA
+      // The interop path leaves grid_ stale; pull the current board for the age update.
+      // (The host-upload path already download()ed grid_ above.)
+      if (present_ == Present::Interop && engine_) engine_->download(grid_);
+#endif
+      const unsigned char* b = grid_.data();
+      for (std::size_t i = 0; i < age_.size(); ++i)
+        age_[i] = b[i] ? static_cast<unsigned char>(std::min(age_[i] + 1, 255)) : 0;
+      ageGen_ = generation_;
+      ageInit_ = true;
+      ageTexDirty_ = true;
+    }
+    if (ageTexDirty_) {
+      glBindTexture(GL_TEXTURE_2D, ageTex_);
+      glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0); // source from client memory, not a PBO
+      glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, static_cast<GLsizei>(cfg_.cols),
+                      static_cast<GLsizei>(cfg_.rows), GL_RED_INTEGER,
+                      GL_UNSIGNED_BYTE, age_.data());
+      ageTexDirty_ = false;
+    }
+  }
+
   glViewport(0, 0, fbw, fbh);
   glClearColor(0.05f, 0.05f, 0.06f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT);
@@ -288,10 +336,17 @@ void GolGlWidget::paintGL() {
   glUniform2f(uCenter_, static_cast<float>(center_.x()), static_cast<float>(center_.y()));
   glUniform2i(uBoard_, static_cast<GLint>(cfg_.cols), static_cast<GLint>(cfg_.rows));
   glUniform1i(uColorMode_, colorMode_);
+  glUniform1i(uPalette_, palette_);
+  glUniform1f(uAgeMax_, static_cast<float>(kAgeMax));
 
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, tex_);
   glUniform1i(uTex_, 0);
+
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, ageTex_);
+  glUniform1i(uAge_, 1);
+  glActiveTexture(GL_TEXTURE0); // leave unit 0 active for tidiness
 
   glBindVertexArray(vao_);
   glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -336,6 +391,13 @@ void GolGlWidget::paintAt(QPointF posLogical, unsigned char value) {
   if (x < 0 || y < 0 || x >= static_cast<int>(cfg_.cols) || y >= static_cast<int>(cfg_.rows))
     return;
   engine_->pokeCell(static_cast<std::size_t>(x), static_cast<std::size_t>(y), value);
+  if (colorMode_ == 2 && !age_.empty()) {
+    // Reflect the edit in the age buffer immediately (a step does not run), so the
+    // painted/erased cell shows up this frame. GL upload happens in paintGL.
+    age_[static_cast<std::size_t>(y) * cfg_.cols + static_cast<std::size_t>(x)] =
+        value ? 1 : 0;
+    ageTexDirty_ = true;
+  }
   update();
 }
 
@@ -367,6 +429,7 @@ void GolGlWidget::reseed() {
   initialGrid_ = grid_; // the new random board is the new reset point
   if (engine_) engine_->upload(grid_);
   generation_ = 0;
+  resetAge();
   update();
 }
 
@@ -375,6 +438,7 @@ void GolGlWidget::clearBoard() {
   initialGrid_ = grid_; // an empty board is the new reset point
   if (engine_) engine_->upload(grid_);
   generation_ = 0;
+  resetAge();
   update();
 }
 
@@ -383,6 +447,7 @@ void GolGlWidget::resetToInitial() {
   grid_ = initialGrid_; // restore the snapshot taken at generation 0
   engine_->upload(grid_);
   generation_ = 0;
+  resetAge();
   update();
 }
 
@@ -397,6 +462,7 @@ void GolGlWidget::loadRle(const QString& path) {
     initialGrid_ = grid_; // the loaded pattern is the new reset point
     engine_->upload(grid_);
     generation_ = 0;
+    resetAge();
     update();
   } catch (const std::exception& e) {
     QMessageBox::warning(this, QStringLiteral("Could not load pattern"),
@@ -405,7 +471,39 @@ void GolGlWidget::loadRle(const QString& path) {
 }
 
 void GolGlWidget::setSpeed(int gensPerFrame) { speed_ = std::max(1, gensPerFrame); }
-void GolGlWidget::setColorMode(int mode) { colorMode_ = mode; update(); }
+
+void GolGlWidget::setColorMode(int mode) {
+  colorMode_ = mode;
+  if (mode == 2) resetAge(); // start the heatmap fresh from the current board
+  update();
+}
+
+void GolGlWidget::setPalette(int palette) {
+  palette_ = palette;
+  update();
+}
+
+// Host-only: zero the age buffer and mark it dirty. The GL upload happens on the next
+// paintGL (which has the context current), so this is safe to call from any UI slot.
+void GolGlWidget::resetAge() {
+  std::fill(age_.begin(), age_.end(), static_cast<unsigned char>(0));
+  ageInit_ = false;
+  ageTexDirty_ = true;
+}
+
+void GolGlWidget::saveScreenshot() {
+  const QImage img = grabFramebuffer(); // makes the context current internally
+  const QString name =
+      QStringLiteral("gol_shot_%1.png")
+          .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss_zzz")));
+  if (img.save(name)) {
+    std::fprintf(stderr, "[gol_gui] screenshot saved: %s\n", name.toLocal8Bit().constData());
+    emit screenshotSaved(name);
+  } else {
+    std::fprintf(stderr, "[gol_gui] failed to save screenshot '%s'\n",
+                 name.toLocal8Bit().constData());
+  }
+}
 
 void GolGlWidget::setWrapEnabled(bool wrap) {
   if (wrap == cfg_.wrap) return;
@@ -466,6 +564,7 @@ void GolGlWidget::keyPressEvent(QKeyEvent* e) {
     case Qt::Key_C:     clearBoard(); break;
     case Qt::Key_F:     fitView(); break;
     case Qt::Key_I:     resetToInitial(); break;
+    case Qt::Key_P:     saveScreenshot(); break;
     default:            QOpenGLWidget::keyPressEvent(e); return;
   }
 }

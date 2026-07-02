@@ -85,11 +85,17 @@ The engine/renderer **strategy** layout below is in place. What exists and works
     Used for the **CPU engine** (so the viewer builds/runs with no CUDA toolkit), and as a graceful
     **fallback** when interop is unavailable (e.g. a GL context on an Optimus iGPU — see below).
 
-  A fragment shader colours each cell (binary or live-neighbour count); a fullscreen-triangle vertex
-  shader needs no VBO. Shaders are GL 3.3 core, **read at runtime** from `src/gui/shaders/` (like
-  `kernel.cl`). Interactive: wheel zoom, middle/right-drag pan, left-drag paint (Shift erases, via the new
-  `ISimEngine::pokeCell`), keys space/S/R/C/I/F, and a Qt control panel (play/pause, step, reset, reseed, clear,
-  **Open RLE…**, speed, colour mode, wrap). CLI mirrors the headless `gol` flags
+  A fragment shader colours each cell in one of three **colour modes** (binary, live-neighbour count, or
+  an **age heatmap** — colour by generations survived) through a selectable **palette** (grayscale (default) /
+  phosphor / amber / magma / ice), and draws **grid lines** around cells once zoomed in past ~4 px/cell; a
+  fullscreen-triangle vertex shader needs no VBO. Shaders are GL 3.3 core, **read at runtime** from
+  `src/gui/shaders/` (like `kernel.cl`). The age heatmap keeps a host-side per-cell "generations survived"
+  buffer (`age_`) in a second `GL_R8UI` texture, updated once per generation and only while that mode is
+  active, so the other modes (and the interop zero-copy path) never pay for it. Interactive: wheel zoom,
+  middle/right-drag pan, left-drag paint (Shift erases, via the new `ISimEngine::pokeCell`), keys
+  space/S/R/C/I/F and **P** (save a PNG screenshot of the view to the CWD via `grabFramebuffer`), and a Qt
+  control panel (play/pause, step, reset, reseed, clear, **Open RLE…**, **Screenshot**, speed, colour mode,
+  palette, wrap). CLI mirrors the headless `gol` flags
   (`--rows/--cols/--gens/--threads/--wrap/--seed/--rle/--engine cpu|cuda/--block` + `COLSxROWS`); `--gens`
   is an interactive auto-pause. Each frame **presents the current board then steps** (not step-then-present),
   so a freshly painted cell is visible the frame it is drawn before it evolves; **reset** restores a
@@ -220,7 +226,7 @@ src/render/    TextRenderer.cpp AnsiRenderer.cpp           (NullRenderer is head
 src/gui/       main_gui.cpp GolGlWidget.cpp MainWindow.cpp shaders/display.vert shaders/display.frag
 src/patterns/  Pattern.cpp RleLoader.cpp
 tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp cuda_equivalence_test.cpp opencl_equivalence_test.cpp
-patterns/      *.rle                                       (block, blinker, birth_on_six, highlife_replicator, highlife_spaceship)
+patterns/      *.rle                                       (block, blinker, birth_on_six, glider, acorn, r_pentomino, highlife_replicator, highlife_spaceship, highlife_c98_gun)
 scripts/       sweep.sh sweep_gpu_opt.ps1 sweep_scaling.ps1 (CPU+CUDA+OpenCL sweeps; .ps1 are the Windows variants)
                run_gui.sh                                  (launch gol_gui on the NVIDIA GPU for zero-copy interop)
 results/       sweep_gpu_opt.csv sweep_scaling.csv          (Windows baseline, BOM); linux/ holds the Linux re-run

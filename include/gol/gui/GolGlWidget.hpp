@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 
 #include <QElapsedTimer>
 #include <QOpenGLFunctions_3_3_Core>
@@ -57,10 +58,12 @@ public slots:
   void clearBoard();               ///< Set every cell dead (becomes the new initial state).
   void resetToInitial();           ///< Restore the board to generation 0 of the current pattern.
   void setSpeed(int gensPerFrame); ///< Generations advanced per displayed frame.
-  void setColorMode(int mode);     ///< 0 = binary, 1 = neighbour count.
+  void setColorMode(int mode);     ///< 0 = binary, 1 = neighbour count, 2 = age heatmap.
+  void setPalette(int palette);    ///< Colour ramp: 0 phosphor, 1 amber, 2 grayscale, 3 magma, 4 ice.
   void setWrapEnabled(bool wrap);  ///< Toggle bounded/toroidal edges (rebuilds the engine).
   void fitView();                  ///< Reset zoom/pan to fit the whole board.
   void loadRle(const QString& path); ///< Load an RLE pattern, stamp it centred, and upload.
+  void saveScreenshot();             ///< Grab the framebuffer to a timestamped PNG in the CWD.
 
 signals:
   /**
@@ -73,6 +76,9 @@ signals:
 
   /// @brief Emitted once after init with the backend description (engine + present mode).
   void backendInfo(const QString& description);
+
+  /// @brief Emitted after a screenshot is written, with the saved file path.
+  void screenshotSaved(const QString& path);
 
 protected:
   void initializeGL() override;
@@ -90,6 +96,7 @@ private:
 
   void seedGrid();                          ///< Fill grid_ from the configured RLE, or a random fill.
   void rebuildEngine();                     ///< (Re)create the engine, preserving the current board.
+  void resetAge();                          ///< Zero the host age buffer; re-uploaded on the next frame.
   unsigned int compileProgram();            ///< Compile/link the display shaders; returns the GL program.
   unsigned int compileShader(unsigned int type, const char* path); ///< Compile one stage from a file.
   QPointF screenToBoard(QPointF posLogical) const; ///< Logical widget pixel -> board cell (float).
@@ -107,17 +114,29 @@ private:
   gol::CudaEngine* cudaEngine_ = nullptr;    ///< Non-owning alias to engine_ when it is a CudaEngine.
 #endif
 
-  unsigned int pbo_ = 0;  ///< Pixel buffer object (interop path).
-  unsigned int tex_ = 0;  ///< GL_R8UI texture sampled by the fragment shader.
-  unsigned int vao_ = 0;  ///< Empty VAO required by core profile for the fullscreen triangle.
-  unsigned int prog_ = 0; ///< Display shader program.
+  unsigned int pbo_ = 0;    ///< Pixel buffer object (interop path).
+  unsigned int tex_ = 0;    ///< GL_R8UI texture sampled by the fragment shader.
+  unsigned int ageTex_ = 0; ///< GL_R8UI per-cell age texture (age-heatmap mode).
+  unsigned int vao_ = 0;    ///< Empty VAO required by core profile for the fullscreen triangle.
+  unsigned int prog_ = 0;   ///< Display shader program.
 
   int uViewSize_ = -1, uScale_ = -1, uCenter_ = -1, uBoard_ = -1, uColorMode_ = -1, uTex_ = -1;
+  int uPalette_ = -1, uAgeMax_ = -1, uAge_ = -1;
 
   QTimer* timer_ = nullptr; ///< Drives repaint at ~60 Hz.
   bool playing_ = false;    ///< Whether step() runs each frame.
   int speed_ = 1;           ///< Generations per frame.
   int colorMode_ = 0;       ///< Current colour mode.
+  int palette_ = 2;         ///< Current colour-ramp palette (default: grayscale).
+
+  // Age-heatmap state: a host-side per-cell "generations survived" buffer, updated
+  // once per generation only while age mode is active (so other modes stay zero-copy).
+  static constexpr int kAgeMax = 64;    ///< Age mapped to the palette's hot end.
+  std::vector<unsigned char> age_;      ///< Host per-cell age buffer (0 = dead).
+  bool ageInit_ = false;                ///< Whether age_ reflects a board yet.
+  bool ageTexDirty_ = false;            ///< age_ changed and must be re-uploaded.
+  unsigned long long ageGen_ = 0;       ///< Generation that age_ currently reflects.
+
   unsigned long long generation_ = 0;    ///< Generation counter.
   unsigned long long reseedCounter_ = 0; ///< Varies the seed across reseeds.
   bool initFailed_ = false; ///< Set if the engine could not be built at all.

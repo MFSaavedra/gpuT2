@@ -39,6 +39,8 @@ MainWindow::MainWindow(const gol::Config& cfg, QWidget* parent)
   auto* clearBtn = new QPushButton("Clear");
   auto* openBtn = new QPushButton("Open RLE…");
   auto* fitBtn = new QPushButton("Fit view");
+  auto* shotBtn = new QPushButton("Screenshot");
+  shotBtn->setToolTip("Save a PNG of the current view to the working directory (key: P)");
 
   auto* speed = new QSlider(Qt::Horizontal);
   speed->setRange(1, 50);
@@ -47,6 +49,15 @@ MainWindow::MainWindow(const gol::Config& cfg, QWidget* parent)
   auto* colorMode = new QComboBox;
   colorMode->addItem("Binary");
   colorMode->addItem("Neighbour count");
+  colorMode->addItem("Age heatmap");
+
+  auto* palette = new QComboBox;
+  palette->addItem("Phosphor");
+  palette->addItem("Amber");
+  palette->addItem("Grayscale");
+  palette->addItem("Magma");
+  palette->addItem("Ice");
+  palette->setCurrentIndex(2); // default to grayscale
 
   auto* wrap = new QCheckBox("Toroidal edges");
   wrap->setChecked(cfg.wrap);
@@ -58,8 +69,10 @@ MainWindow::MainWindow(const gol::Config& cfg, QWidget* parent)
   form->addRow(clearBtn);
   form->addRow(openBtn);
   form->addRow(fitBtn);
+  form->addRow(shotBtn);
   form->addRow("Speed (gens/frame)", speed);
   form->addRow("Colour", colorMode);
+  form->addRow("Palette", palette);
   form->addRow(wrap);
 
   auto* dock = new QDockWidget("Controls", this);
@@ -77,6 +90,7 @@ MainWindow::MainWindow(const gol::Config& cfg, QWidget* parent)
   connect(reseedBtn, &QPushButton::clicked, view_, &GolGlWidget::reseed);
   connect(clearBtn, &QPushButton::clicked, view_, &GolGlWidget::clearBoard);
   connect(fitBtn, &QPushButton::clicked, view_, &GolGlWidget::fitView);
+  connect(shotBtn, &QPushButton::clicked, view_, &GolGlWidget::saveScreenshot);
   connect(openBtn, &QPushButton::clicked, this, [this] {
     const QString f = QFileDialog::getOpenFileName(
         this, "Open RLE pattern", QString(), "RLE patterns (*.rle);;All files (*)");
@@ -84,8 +98,11 @@ MainWindow::MainWindow(const gol::Config& cfg, QWidget* parent)
   });
   connect(speed, &QSlider::valueChanged, view_, &GolGlWidget::setSpeed);
   connect(colorMode, &QComboBox::currentIndexChanged, view_, &GolGlWidget::setColorMode);
+  connect(palette, &QComboBox::currentIndexChanged, view_, &GolGlWidget::setPalette);
   connect(wrap, &QCheckBox::toggled, view_, &GolGlWidget::setWrapEnabled);
   connect(view_, &GolGlWidget::statsChanged, this, &MainWindow::onStats);
+  connect(view_, &GolGlWidget::screenshotSaved, this,
+          [this](const QString& p) { statusBar()->showMessage("Saved " + p, 4000); });
   connect(view_, &GolGlWidget::backendInfo, this, [this](const QString& d) {
     setWindowTitle("Game of Life — " + d);
   });
