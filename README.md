@@ -103,7 +103,8 @@ runs **with no CUDA toolkit**.
 Build it with `-DBUILD_GUI=ON` (needs Qt6: Widgets, OpenGL, OpenGLWidgets):
 
 ```bash
-cmake -S . -B build -DBUILD_CUDA=ON -DBUILD_GUI=ON
+cmake -S . -B build -DBUILD_GUI=ON                                  # CUDA-free: CPU engine + host-upload (no NVIDIA/CUDA needed)
+cmake -S . -B build -DBUILD_CUDA=ON -DBUILD_GUI=ON                  # add the zero-copy CUDA/GL interop path
 cmake --build build --target gol_gui
 ./scripts/run_gui.sh 1024x1024 --rle patterns/highlife_c98_gun.rle  # NVIDIA GL context (zero-copy)
 ./build/gol_gui --engine cpu 512x512                                # CPU engine, runs anywhere
