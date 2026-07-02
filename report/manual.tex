@@ -404,7 +404,7 @@ private:
 It uses \texttt{steady\_clock}, not \texttt{system\_clock}, because it is
 monotonic: it cannot jump backwards if the wall clock is adjusted mid-run, which
 would corrupt a timing. This is the CPU backend's kernel-timing source; the GPU
-backends will time with \texttt{cudaEvent\_t} / CL events instead.
+backends time with \texttt{cudaEvent\_t} / CL events instead.
 
 \subsection{\texttt{ISimEngine} and \texttt{IRenderer} --- the two strategy interfaces}
 \label{sec:interfaces}
@@ -445,10 +445,13 @@ public:
 };
 \end{sourcecode}
 
-\texttt{shouldClose()} defaults to \texttt{false}; only an interactive GUI
-renderer would override it to break the loop early. The key implementation is
-\texttt{NullRenderer} (Section \ref{sec:render}), whose entire purpose is to
-\emph{not exist} in the timed path.
+\texttt{shouldClose()} defaults to \texttt{false}; the interactive
+\texttt{AnsiRenderer} (Section \ref{sec:ansi}) overrides it so a keypress
+(\texttt{q}) can break the loop early. (The Qt viewer also breaks early on quit,
+but it is a \emph{separate} front-end, not an \texttt{IRenderer} ---
+Section~\ref{sec:gui}.) The key implementation is \texttt{NullRenderer}
+(Section \ref{sec:render}), whose entire purpose is to \emph{not exist} in the
+timed path.
 
 \subsection{\texttt{Config} --- the run configuration}
 \label{sec:config}
@@ -645,8 +648,12 @@ yielding \texttt{inf}/NaN.
 
 The whole body runs inside a \texttt{try/catch} so that, e.g., a missing RLE file
 (which throws in the loader) is reported cleanly on \texttt{stderr} with exit
-code 1. A guard before the loop rejects \texttt{--engine cuda|opencl} because
-those backends are not built yet.
+code 1. The engine itself comes from a \texttt{makeEngine} factory that maps the
+configured \texttt{EngineKind} to a concrete backend; it returns \texttt{nullptr}
+only when the requested backend was \emph{not compiled into this build} (e.g.
+\texttt{--engine cuda} without \texttt{-DBUILD\_CUDA=ON}), in which case
+\texttt{main} prints \emph{``the requested engine is not available in this build''}
+and exits~1.
 
 \section{The CPU engine --- \texttt{CpuEngine.cpp}}
 \label{sec:cpu}
@@ -1715,18 +1722,20 @@ endif()
 \end{sourcecode}
 
 Each GPU backend is \textbf{double-gated}: an \texttt{option(... OFF)}
-\emph{and} an \texttt{if(EXISTS <source>)} check. Even passing
-\texttt{-DBUILD\_CUDA=ON} today emits a warning and skips the target because the
-\texttt{.cu} source does not exist yet --- it does not fail configuration. The
-OpenCL target follows the identical pattern. \texttt{find\_package(Threads
-REQUIRED)} is what makes \texttt{std::thread}/\texttt{std::barrier} link on the
-CPU engine.
+\emph{and} an \texttt{if(EXISTS <source>)} check. The \texttt{EXISTS} guard means
+a configure with \texttt{-DBUILD\_CUDA=ON} never hard-fails: if the \texttt{.cu}
+sources were absent it would emit a warning and skip the target rather than
+erroring. With the sources present (as now) it enables the CUDA language and
+builds \texttt{gol\_cuda}, wiring it into \texttt{gol} with the
+\texttt{GOL\_HAVE\_CUDA} definition. The OpenCL target follows the identical
+pattern. \texttt{find\_package(Threads REQUIRED)} is what makes
+\texttt{std::thread}/\texttt{std::barrier} link on the CPU engine.
 
 \begin{sourcecode}{bash}{Building and testing.}
 cmake -S . -B build                 # core + CPU + tests (GPU OFF by default)
 cmake --build build
 ctest --test-dir build --output-on-failure
-# GPU opt-in (once the sources exist):
+# GPU opt-in (CUDA/OpenCL toolkits required):
 cmake -S . -B build -DBUILD_CUDA=ON -DBUILD_OPENCL=ON
 \end{sourcecode}
 

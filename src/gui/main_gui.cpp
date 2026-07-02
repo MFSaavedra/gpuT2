@@ -4,7 +4,7 @@
  *
  * A separate front-end from the headless `gol` benchmark binary: Qt owns the event
  * loop (QApplication::exec), so this cannot reuse main.cpp's generation loop. It
- * requests a 4.3 core GL context, builds the window, and hands control to Qt.
+ * requests a 3.3 core GL context, builds the window, and hands control to Qt.
  *
  * Usage: gol_gui [COLSxROWS] [--engine cpu|cuda] [--threads N] [--wrap] [--seed N] [--block N]
  */
