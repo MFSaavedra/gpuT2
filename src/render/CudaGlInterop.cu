@@ -39,9 +39,21 @@ void CudaGlInterop::registerBuffer(unsigned int glBufferId, std::size_t bytes) {
   cudaGraphicsResource_t res = nullptr;
   // WriteDiscard: CUDA fully overwrites the buffer each frame, so the driver need
   // not preserve its previous contents.
-  cudaCheck(cudaGraphicsGLRegisterBuffer(&res, glBufferId,
-                                         cudaGraphicsRegisterFlagsWriteDiscard),
-            "cudaGraphicsGLRegisterBuffer");
+  const cudaError_t e = cudaGraphicsGLRegisterBuffer(
+      &res, glBufferId, cudaGraphicsRegisterFlagsWriteDiscard);
+  if (e != cudaSuccess) {
+    // Registration can legitimately fail when the current GL context is on a
+    // different GPU than CUDA (e.g. an Optimus iGPU context), in which case the
+    // caller falls back to host-upload. The failed call has recorded the error in
+    // the runtime's per-thread "last error" slot, though; clear it here (it is a
+    // non-sticky validation error, so the context stays usable) so that a later
+    // engine kernel launch's cudaGetLastError() check does not inherit it and
+    // throw a spurious "kernel launch failed".
+    cudaGetLastError();
+    throw std::runtime_error(
+        std::string("CUDA-GL interop error in cudaGraphicsGLRegisterBuffer: ") +
+        cudaGetErrorString(e));
+  }
   resource_ = res;
   bytes_ = bytes;
 }
