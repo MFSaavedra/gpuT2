@@ -1,7 +1,11 @@
-cmake_minimum_required(VERSION 3.28)
+# 3.18 is the real floor: CUDA_ARCHITECTURES (target property) needs >= 3.18, and
+# Qt6 needs >= 3.16. Nothing here uses a newer CMake feature.
+cmake_minimum_required(VERSION 3.18)
 project(gpuT2 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 23)
+# C++17 is the floor: the codebase uses no C++20/23 library or language feature
+# (the one C++20 use, std::barrier, is replaced by gol::Barrier in Barrier.hpp).
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 enable_testing()
@@ -20,7 +24,7 @@ add_library(gol_core STATIC
 target_include_directories(gol_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_compile_features(gol_core PUBLIC cxx_std_23)
+target_compile_features(gol_core PUBLIC cxx_std_17)
 
 # ----------------------------------------------------------------------------
 # CPU engine (always built — no toolkit required). One implementation serves both
@@ -68,12 +72,12 @@ if(BUILD_CUDA)
         )
         # gol_cuda only consumes header-only pieces (LifeRules.hpp, Grid.hpp), so it
         # needs gol_core's include dir but must NOT link gol_core -- that would
-        # propagate the cxx_std_23 requirement onto nvcc, which has no such flag.
+        # propagate gol_core's cxx_std_17 requirement onto nvcc as a host flag.
         target_include_directories(gol_cuda PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
         set_target_properties(gol_cuda PROPERTIES
             CUDA_ARCHITECTURES 75              # GTX 1660 Ti (Turing); override as needed
             CUDA_SEPARABLE_COMPILATION OFF
-            CUDA_STANDARD 17                   # device TUs need only C++17; host/app stays C++23
+            CUDA_STANDARD 17                   # device TUs use C++17, same as host/app
             CUDA_STANDARD_REQUIRED ON
         )
         target_compile_options(gol_cuda PRIVATE
@@ -131,11 +135,22 @@ endif()
 # ----------------------------------------------------------------------------
 option(BUILD_GUI "Build the Qt OpenGL Game of Life viewer" OFF)
 if(BUILD_GUI)
-    find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
+    # Support both Qt6 and Qt5. `QT NAMES Qt6 Qt5` prefers Qt6 but accepts Qt5 and
+    # sets QT_VERSION_MAJOR. Qt6 split the OpenGL classes into dedicated modules
+    # (OpenGL, OpenGLWidgets); under Qt5 they ship inside Gui/Widgets, so the extra
+    # components are Qt6-only. Version-qualified targets keep the link line correct
+    # on either major version.
+    find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core Gui Widgets)
+    find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core Gui Widgets)
 
     set(_gui_libs gol_core gol_cpu
-        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets)
+        Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Widgets)
     set(_gui_defs "")
+
+    if(QT_VERSION_MAJOR GREATER_EQUAL 6)
+        find_package(Qt6 REQUIRED COMPONENTS OpenGL OpenGLWidgets)
+        list(APPEND _gui_libs Qt6::OpenGL Qt6::OpenGLWidgets)
+    endif()
 
     if(GOL_CUDA_ENABLED)
         find_package(CUDAToolkit REQUIRED)

@@ -36,12 +36,13 @@ is CUDA-only); see **Benchmarking** and **Report** below.
 
 ## Requirements
 
-* C++ 23 compiler.
-* CMake >= 3.28.
+* C++ 17 compiler.
+* CMake >= 3.18.
 * Will use a local googletest install if available; otherwise it is fetched
   and built automatically.
 * CUDA toolkit (only for the CUDA target).
 * OpenCL headers and runtime (only for the OpenCL target).
+* Qt5 or Qt6 (only for the `gol_gui` viewer target).
 
 ## Build
 
@@ -100,7 +101,8 @@ without a host round trip (zero-copy); the CPU engine — and any context where
 interop is unavailable — falls back to a host-upload path, so the viewer builds and
 runs **with no CUDA toolkit**.
 
-Build it with `-DBUILD_GUI=ON` (needs Qt6: Widgets, OpenGL, OpenGLWidgets):
+Build it with `-DBUILD_GUI=ON` (needs Qt5 or Qt6: Core, Gui, Widgets — plus the
+OpenGL/OpenGLWidgets modules on Qt6; CMake prefers Qt6 when both are present):
 
 ```bash
 cmake -S . -B build -DBUILD_GUI=ON                                  # CUDA-free: CPU engine + host-upload (no NVIDIA/CUDA needed)
@@ -130,7 +132,7 @@ UHD 630, NVIDIA proprietary driver, Wayland session). Two support tiers:
   script forces `QT_QPA_PLATFORM=xcb`. On a single-NVIDIA X11 box the PRIME vars are
   no-ops and a bare launch already gets interop.
 * **Host-upload path** (`./build/gol_gui --engine cpu 512x512`) — portable: runs on
-  **any** Linux with Qt6 (Widgets/OpenGL/OpenGLWidgets) and an OpenGL 3.3 driver, with
+  **any** Linux with Qt5 or Qt6 (Core/Gui/Widgets, plus OpenGL/OpenGLWidgets on Qt6) and an OpenGL 3.3 driver, with
   no NVIDIA GPU and no CUDA toolkit. The viewer also falls back to this automatically
   whenever interop registration fails.
 

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <atomic>
-#include <barrier>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -9,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "gol/Barrier.hpp"
 #include "gol/Grid.hpp"
 #include "gol/ISimEngine.hpp"
 
@@ -35,9 +35,9 @@ namespace gol {
  *   - threads >= 2  -> N row-blocks computed in parallel
  *   - threads == 0  -> resolved to std::thread::hardware_concurrency()
  *
- * The parallel path uses a persistent worker pool synchronised with a
- * std::barrier so per-generation thread-creation cost never pollutes the
- * cells/sec metric.
+ * The parallel path uses a persistent worker pool synchronised with a reusable
+ * Barrier (see Barrier.hpp) so per-generation thread-creation cost never pollutes
+ * the cells/sec metric.
  */
 class CpuEngine final : public ISimEngine {
 public:
@@ -128,8 +128,8 @@ private:
   double lastMs_ = 0.0;            ///< Compute time of the last step(), in ms.
 
   // Persistent worker pool (only populated when threads_ >= 2).
-  std::vector<std::thread> workers_;        ///< Worker threads (size threads_ - 1).
-  std::unique_ptr<std::barrier<>> barrier_; ///< Two-phase sync; threads_ participants.
+  std::vector<std::thread> workers_;   ///< Worker threads (size threads_ - 1).
+  std::unique_ptr<Barrier> barrier_;   ///< Two-phase sync; threads_ participants.
   const unsigned char* src_ = nullptr;      ///< Source buffer published to workers each step.
   unsigned char* dst_ = nullptr;            ///< Destination buffer published to workers each step.
   std::atomic<bool> stop_{false};           ///< Set at destruction to release the workers.

@@ -36,7 +36,7 @@ CpuEngine::~CpuEngine() {
 
 void CpuEngine::startPool() {
   // barrier participants = main thread + (threads_ - 1) workers = threads_.
-  barrier_ = std::make_unique<std::barrier<>>(static_cast<std::ptrdiff_t>(threads_));
+  barrier_ = std::make_unique<Barrier>(static_cast<std::ptrdiff_t>(threads_));
   workers_.reserve(threads_ - 1);
   for (unsigned id = 1; id < threads_; ++id) {
     workers_.emplace_back([this, id] { workerLoop(id); });

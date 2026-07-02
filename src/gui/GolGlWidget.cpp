@@ -38,6 +38,24 @@ std::string readFile(const std::string& path) {
   ss << f.rdbuf();
   return ss.str();
 }
+
+// Qt6 unified the local-position accessor as position() (QSinglePointEvent); Qt5
+// exposes it as QMouseEvent::localPos() / QWheelEvent::position() (since 5.14).
+// These shims keep the input handlers building on either major version.
+inline QPointF localPosOf(const QMouseEvent* e) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+  return e->position();
+#else
+  return e->localPos();
+#endif
+}
+inline QPointF localPosOf(const QWheelEvent* e) {
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+  return e->position();
+#else
+  return e->posF();
+#endif
+}
 } // namespace
 
 GolGlWidget::GolGlWidget(gol::Config cfg, QWidget* parent)
@@ -520,20 +538,20 @@ void GolGlWidget::mousePressEvent(QMouseEvent* e) {
   if (e->button() == Qt::LeftButton) {
     painting_ = true;
     paintValue_ = (e->modifiers() & Qt::ShiftModifier) ? 0 : 1; // Shift erases
-    paintAt(e->position(), paintValue_);
+    paintAt(localPosOf(e), paintValue_);
   } else if (e->button() == Qt::MiddleButton || e->button() == Qt::RightButton) {
     panning_ = true;
-    lastDragPos_ = e->position();
+    lastDragPos_ = localPosOf(e);
   }
 }
 
 void GolGlWidget::mouseMoveEvent(QMouseEvent* e) {
   if (painting_) {
-    paintAt(e->position(), paintValue_);
+    paintAt(localPosOf(e), paintValue_);
   } else if (panning_) {
     const double dpr = devicePixelRatioF();
-    const QPointF d = e->position() - lastDragPos_;
-    lastDragPos_ = e->position();
+    const QPointF d = localPosOf(e) - lastDragPos_;
+    lastDragPos_ = localPosOf(e);
     // Drag moves the content with the cursor: shift the centre the opposite way.
     center_ -= QPointF(d.x() * dpr / scale_, d.y() * dpr / scale_);
     update();
@@ -548,10 +566,10 @@ void GolGlWidget::mouseReleaseEvent(QMouseEvent* e) {
 void GolGlWidget::wheelEvent(QWheelEvent* e) {
   const double steps = e->angleDelta().y() / 120.0;
   if (steps == 0.0) return;
-  const QPointF before = screenToBoard(e->position());
+  const QPointF before = screenToBoard(localPosOf(e));
   scale_ *= std::pow(1.2, steps);
   scale_ = std::clamp(scale_, 0.02, 256.0);
-  const QPointF after = screenToBoard(e->position());
+  const QPointF after = screenToBoard(localPosOf(e));
   center_ += (before - after); // keep the cell under the cursor fixed
   update();
 }

@@ -26,7 +26,8 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   variant rule), the `Pattern` / `RleLoader` data pipeline, and the `ISimEngine` / `IRenderer` interfaces.
 - **CpuEngine** (`ISimEngine`) — implemented. A single code path serves both the **sequential** baseline
   (`threads == 1`, no synchronisation) and the **data-parallel** mode (`threads >= 2`, a persistent worker
-  pool synchronised with `std::barrier`; `threads == 0` = all hardware cores). Both only partition the
+  pool synchronised with the header-only `gol::Barrier` (`Barrier.hpp`), a reusable two-phase barrier used
+  in place of C++20's `std::barrier`; `threads == 0` = all hardware cores). Both only partition the
   rows, so they produce bit-for-bit identical boards.
 - **Renderers** — `NullRenderer` (header-only, for benchmarking), `TextRenderer` (scrolling text
   dump), and `AnsiRenderer` (in-place ANSI animation; clips big grids to the terminal viewport). Both
@@ -112,7 +113,9 @@ is not used — the `Grid` is flat 1-D.
 
 ## Build & test
 
-Requires a C++23 compiler and CMake ≥ 3.28.
+Requires a C++17 compiler and CMake ≥ 3.18. (The codebase uses no C++20/23 feature;
+the one C++20 use, `std::barrier`, is replaced by the header-only `gol::Barrier` in
+`Barrier.hpp`. The `compatibility` branch lowered these floors from C++23 / CMake 3.28.)
 
 ```bash
 cmake -S . -B build              # core + CPU engine + tests (GPU targets OFF by default)
@@ -126,8 +129,10 @@ GPU targets are opt-in:
 cmake -S . -B build -DBUILD_CUDA=ON -DBUILD_OPENCL=ON
 ```
 
-The Qt + OpenGL viewer (`gol_gui`) is opt-in via `-DBUILD_GUI=ON` (needs Qt6: Widgets, OpenGL,
-OpenGLWidgets). It does **not** require CUDA — without `-DBUILD_CUDA=ON` it builds CPU-only (host-upload
+The Qt + OpenGL viewer (`gol_gui`) is opt-in via `-DBUILD_GUI=ON` (needs **Qt5 or Qt6**: Core, Gui,
+Widgets, plus OpenGL/OpenGLWidgets on Qt6 — under Qt5 those classes live in Gui/Widgets. CMake uses
+`find_package(QT NAMES Qt6 Qt5 …)`, preferring Qt6). It does **not** require CUDA — without
+`-DBUILD_CUDA=ON` it builds CPU-only (host-upload
 display); with `-DBUILD_CUDA=ON` it additionally offers the zero-copy CUDA/GL interop path:
 
 ```bash
@@ -207,14 +212,14 @@ both, the seq-vs-parallel test covers each mode, and the GPU backends must match
 
 CMake: a core library (always), a CPU engine (always), CUDA/OpenCL engine libraries gated on
 `BUILD_CUDA` / `BUILD_OPENCL`, and renderer sources. The project must build and run (CPU + text) with
-no CUDA toolkit and no OpenCL present. The `gol_gui` executable is gated on `BUILD_GUI` (finds Qt6); it
+no CUDA toolkit and no OpenCL present. The `gol_gui` executable is gated on `BUILD_GUI` (finds Qt5 or Qt6); it
 always links the CPU engine, and when `BUILD_CUDA` is also on it builds the `gol_cudagl` interop bridge
 (nvcc), links the CUDA engine, and defines `GOL_HAVE_CUDA`.
 
 Layout (parenthesised notes are clarifications — header-only units, directory contents):
 
 ```
-include/gol/   Grid.hpp ISimEngine.hpp IRenderer.hpp Config.hpp LifeRules.hpp Timer.hpp
+include/gol/   Grid.hpp ISimEngine.hpp IRenderer.hpp Config.hpp LifeRules.hpp Timer.hpp Barrier.hpp
                engines/CpuEngine.hpp  render/NullRenderer.hpp render/TextRenderer.hpp render/AnsiRenderer.hpp
                render/CudaGlInterop.hpp  gui/GolGlWidget.hpp gui/MainWindow.hpp
                patterns/Pattern.hpp patterns/RleLoader.hpp
