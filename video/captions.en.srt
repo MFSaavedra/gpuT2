@@ -1,0 +1,115 @@
+1
+00:00:00,000 --> 00:00:06,000
+Conway's Game of Life — HighLife variant (B36/S23)
+
+2
+00:00:06,000 --> 00:00:14,000
+First, the same engine headless in the terminal with the text/ANSI renderer (the Tarea 2 core)
+
+3
+00:00:14,000 --> 00:00:22,000
+Now the real-time viewer: computed and drawn on the GPU via CUDA <-> OpenGL interop, no host copies
+
+4
+00:00:22,000 --> 00:00:30,500
+Strategy-pattern core + a swappable ISimEngine interface (CPU/CUDA/OpenCL)
+
+5
+00:00:30,500 --> 00:00:39,000
+The GUI is a separate front-end: Qt owns the loop, driving the engine and the present path
+
+6
+00:00:39,000 --> 00:00:48,000
+CudaEngine keeps two device buffers, ping-ponging on the GPU (read A -> write B -> swap)
+
+7
+00:00:48,000 --> 00:00:56,000
+scripts/run_gui.sh uses PRIME offload to put the OpenGL context on the NVIDIA GPU
+
+8
+00:00:56,000 --> 00:01:02,500
+The terminal confirms GL_RENDERER = NVIDIA GeForce GTX 1660 Ti
+
+9
+00:01:02,500 --> 00:01:10,000
+The title bar reads "CudaEngine / zero-copy interop": the fast path is active
+
+10
+00:01:10,000 --> 00:01:18,500
+At init, the OpenGL PBO is registered with CUDA via cudaGraphicsGLRegisterBuffer (WriteDiscard)
+
+11
+00:01:18,500 --> 00:01:27,500
+Each frame maps the PBO and copies CUDA's current buffer device->device (cudaMemcpy D2D)
+
+12
+00:01:27,500 --> 00:01:36,500
+Then glTexSubImage2D streams that PBO into a GL_R8UI texture (1 byte/cell), no host pointer
+
+13
+00:01:36,500 --> 00:01:44,000
+The data never returns to the host over PCIe — that is exactly what interop saves
+
+14
+00:01:44,000 --> 00:01:52,500
+If the GL context lands on the Intel iGPU, interop fails and gracefully falls back to host-upload
+
+15
+00:01:52,500 --> 00:02:00,500
+The shaders are GL 3.3 core, read at runtime from src/gui/shaders/
+
+16
+00:02:00,500 --> 00:02:09,000
+Vertex shader: builds a fullscreen triangle from gl_VertexID — no VBO, no attributes
+
+17
+00:02:09,000 --> 00:02:17,500
+Fragment shader: maps each pixel back to a cell (same center/scale as mouse picking)
+
+18
+00:02:17,500 --> 00:02:25,500
+It reads the exact cell with texelFetch on a usampler2D: integer texture, no filtering
+
+19
+00:02:25,500 --> 00:02:33,000
+Binary mode: dead cells dark, live cells in the palette's hot colour
+
+20
+00:02:33,000 --> 00:02:41,000
+Neighbour count: the shader sums the 8 neighbours with texelFetch and colours by density
+
+21
+00:02:41,000 --> 00:02:49,500
+Age heatmap: colours by generations survived, from a second R8UI texture
+
+22
+00:02:49,500 --> 00:02:58,500
+The "age" lives in a host buffer, +1 per generation, uploaded only in this mode (others pay nothing)
+
+23
+00:02:58,500 --> 00:03:07,000
+6 palettes in the shader; for age, "spectrum" rotates hue (red->green->blue) instead of brightness
+
+24
+00:03:07,000 --> 00:03:15,000
+Past ~4 px/cell the shader darkens each cell's border: grid lines with no geometry
+
+25
+00:03:15,000 --> 00:03:23,000
+Wheel: zoom keeping the cell under the cursor fixed; middle- or right-drag: pan
+
+26
+00:03:23,000 --> 00:03:31,500
+Left-drag paints live cells, Shift erases, via ISimEngine::pokeCell (live editing)
+
+27
+00:03:31,500 --> 00:03:39,500
+Each frame presents, then steps: the cell you paint is shown before it evolves
+
+28
+00:03:39,500 --> 00:03:46,500
+The backends are verified bit-for-bit against the CPU oracle and against Golly/bgolly
+
+29
+00:03:46,500 --> 00:03:55,000
+Zero-copy interop + shaders: computed and displayed on the GPU, with no host copies

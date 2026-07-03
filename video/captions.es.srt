@@ -1,0 +1,115 @@
+1
+00:00:00,000 --> 00:00:06,000
+Juego de la Vida de Conway — variante HighLife (B36/S23)
+
+2
+00:00:06,000 --> 00:00:14,000
+Primero, el mismo motor en la terminal con el renderer de texto/ANSI (base de la Tarea 2)
+
+3
+00:00:14,000 --> 00:00:22,000
+Ahora el visualizador en tiempo real: se calcula y se dibuja en la GPU con interop CUDA <-> OpenGL, sin copias al host
+
+4
+00:00:22,000 --> 00:00:30,500
+Arquitectura por estrategia: un núcleo agnóstico + la interfaz intercambiable ISimEngine (CPU/CUDA/OpenCL)
+
+5
+00:00:30,500 --> 00:00:39,000
+La GUI es un front-end aparte: Qt controla el bucle y maneja el motor y la ruta de presentación
+
+6
+00:00:39,000 --> 00:00:48,000
+CudaEngine tiene dos buffers en el dispositivo y hace ping-pong en la GPU (lee A -> escribe B -> intercambia)
+
+7
+00:00:48,000 --> 00:00:56,000
+scripts/run_gui.sh usa PRIME offload para poner el contexto OpenGL en la GPU NVIDIA
+
+8
+00:00:56,000 --> 00:01:02,500
+La terminal confirma GL_RENDERER = NVIDIA GeForce GTX 1660 Ti
+
+9
+00:01:02,500 --> 00:01:10,000
+La barra de título dice "CudaEngine / zero-copy interop": la ruta rápida está activa
+
+10
+00:01:10,000 --> 00:01:18,500
+Al iniciar, el PBO de OpenGL se registra en CUDA con cudaGraphicsGLRegisterBuffer (WriteDiscard)
+
+11
+00:01:18,500 --> 00:01:27,500
+Cada frame se mapea el PBO y se copia device->device el buffer actual de CUDA (cudaMemcpy D2D)
+
+12
+00:01:27,500 --> 00:01:36,500
+Después glTexSubImage2D sube ese PBO a una textura GL_R8UI (1 byte por celda), sin puntero de host
+
+13
+00:01:36,500 --> 00:01:44,000
+El dato nunca vuelve al host por PCIe: eso es exactamente lo que ahorra la interop
+
+14
+00:01:44,000 --> 00:01:52,500
+Si el contexto GL cae en la iGPU Intel, la interop falla y cae con gracia a host-upload
+
+15
+00:01:52,500 --> 00:02:00,500
+Los shaders son GL 3.3 core y se leen en tiempo de ejecución desde src/gui/shaders/
+
+16
+00:02:00,500 --> 00:02:09,000
+Vertex shader: arma un triángulo a pantalla completa desde gl_VertexID, sin VBO ni atributos
+
+17
+00:02:09,000 --> 00:02:17,500
+Fragment shader: de cada pixel reconstruye la celda (mismo center/scale que el picking del mouse)
+
+18
+00:02:17,500 --> 00:02:25,500
+Lee la celda exacta con texelFetch sobre un usampler2D: textura entera, sin filtrado
+
+19
+00:02:25,500 --> 00:02:33,000
+Modo binario: celda muerta oscura, celda viva en el color caliente de la paleta
+
+20
+00:02:33,000 --> 00:02:41,000
+Conteo de vecinos: el shader suma los 8 vecinos con texelFetch y colorea por densidad
+
+21
+00:02:41,000 --> 00:02:49,500
+Mapa de calor por edad: colorea según generaciones sobrevividas, desde una 2a textura R8UI
+
+22
+00:02:49,500 --> 00:02:58,500
+La "edad" vive en un buffer del host, +1 por generación, y solo se sube en ese modo (los demás no pagan)
+
+23
+00:02:58,500 --> 00:03:07,000
+6 paletas en el shader; para la edad, "spectrum" rota el tono (rojo->verde->azul) en vez del brillo
+
+24
+00:03:07,000 --> 00:03:15,000
+Sobre ~4 px por celda el shader oscurece el borde de cada celda: líneas de grilla sin geometría
+
+25
+00:03:15,000 --> 00:03:23,000
+Rueda: zoom manteniendo fija la celda bajo el cursor; botón medio o derecho: paneo
+
+26
+00:03:23,000 --> 00:03:31,500
+Botón izquierdo pinta celdas vivas, Shift borra, vía ISimEngine::pokeCell (edición en vivo)
+
+27
+00:03:31,500 --> 00:03:39,500
+Cada frame primero muestra y luego avanza: la celda que pintas se ve antes de evolucionar
+
+28
+00:03:39,500 --> 00:03:46,500
+Los backends se verifican bit a bit contra el oráculo CPU y contra Golly/bgolly
+
+29
+00:03:46,500 --> 00:03:55,000
+Interop de copia cero + shaders: se calcula y se visualiza en la GPU, sin copias al host

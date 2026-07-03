@@ -58,3 +58,11 @@ compile_commands.json
 # ----------------------------------------------------------------------------
 .DS_Store
 Thumbs.db
+
+# ----------------------------------------------------------------------------
+# Large video working files (rendered/raw). The finished captioned video is a
+# deliverable shipped in the submission tarball, NOT committed (GitHub caps at
+# 100 MB). The caption .srt files, storyboard, and burn_captions.sh ARE tracked.
+# ----------------------------------------------------------------------------
+video/*.mp4
+video/*.webm
