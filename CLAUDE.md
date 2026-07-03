@@ -88,8 +88,11 @@ The engine/renderer **strategy** layout below is in place. What exists and works
 
   A fragment shader colours each cell in one of three **colour modes** (binary, live-neighbour count, or
   an **age heatmap** — colour by generations survived) through a selectable **palette** (grayscale (default) /
-  phosphor / amber / magma / ice), and draws **grid lines** around cells once zoomed in past ~4 px/cell; a
-  fullscreen-triangle vertex shader needs no VBO. Shaders are GL 3.3 core, **read at runtime** from
+  phosphor / amber / magma / ice / **spectrum**), and draws **grid lines** around cells once zoomed in past
+  ~4 px/cell; a
+  fullscreen-triangle vertex shader needs no VBO. (**spectrum** rotates hue red→green→blue at fixed
+  brightness, intended for the age heatmap — the single-hue ramps like phosphor/grayscale only vary
+  brightness, so young vs. old cells are hard to tell apart there.) Shaders are GL 3.3 core, **read at runtime** from
   `src/gui/shaders/` (like `kernel.cl`). The age heatmap keeps a host-side per-cell "generations survived"
   buffer (`age_`) in a second `GL_R8UI` texture, updated once per generation and only while that mode is
   active, so the other modes (and the interop zero-copy path) never pay for it. Interactive: wheel zoom,

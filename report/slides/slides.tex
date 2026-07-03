@@ -13,11 +13,25 @@
 \graphicspath{{../img/}}
 
 % --- Compact code style for GLSL / C++ snippets --------------------------------
+% language=C++ is what makes listings actually tokenize (identify comments,
+% strings and keywords); without it every token falls through to basicstyle and
+% renders black. A second keyword class colours the GLSL/CUDA/GL identifiers that
+% the C++ language table doesn't know about.
 \lstdefinestyle{gol}{%
-  basicstyle=\ttfamily\scriptsize,
+  language=C++,
+  basicstyle=\ttfamily\scriptsize\color{jqdark},
   keywordstyle=\color{jqblue}\bfseries,
+  keywordstyle=[2]\color{jqorange}\bfseries,
   commentstyle=\color{jqgray}\itshape,
-  stringstyle=\color{jqorange},
+  stringstyle=\color{jqgreen},
+  morekeywords=[2]{%
+    vec2,vec3,vec4,ivec2,ivec3,uvec2,mat3,mat4,uniform,usampler2D,sampler2D,%
+    texelFetch,texture,fract,floor,mix,clamp,dot,gl_Position,gl_VertexID,%
+    gl_FragColor,cudaGraphicsGLRegisterBuffer,cudaGraphicsMapResources,%
+    cudaGraphicsResourceGetMappedPointer,cudaMemcpy,cudaGraphicsUnmapResources,%
+    cudaGraphicsRegisterFlagsWriteDiscard,cudaMemcpyDeviceToDevice,%
+    glTexImage2D,glTexSubImage2D,GL_R8UI,GL_RED_INTEGER,GL_UNSIGNED_BYTE,%
+    GL_TEXTURE_2D,palette,cellAt},
   showstringspaces=false,
   columns=fullflexible,
   keepspaces=true,
@@ -78,7 +92,7 @@
             \textbf{Qt es dueña del loop}, así que no reusa el bucle de
             \texttt{main.cpp}.
 
-            \vspace{0.15cm}
+            \vspace{0.1cm}
             \begin{itemize}\footnotesize
                 \item \texttt{GolGlWidget} conduce cualquier
                       \texttt{ISimEngine} (CPU o CUDA).
@@ -87,15 +101,14 @@
                 \item \texttt{CudaGlInterop} es el puente CUDA\,$\leftrightarrow$\,GL.
             \end{itemize}
 
-            \vspace{0.1cm}
             \begin{block}{Patrón}
-                \emph{Strategy}: motor y camino de presentación intercambiables;
-                el shader no cambia.
+                \footnotesize\emph{Strategy}: motor y camino de presentación
+                intercambiables; el shader no cambia.
             \end{block}
         \end{column}
         \begin{column}{0.52\textwidth}
             \centering
-            \includegraphics[height=0.80\textheight]{gui_architecture.png}
+            \includegraphics[height=0.74\textheight]{gui_architecture.png}
         \end{column}
     \end{columns}
 \end{frame}
@@ -248,7 +261,7 @@ if (uScale >= 4.0) {
 \end{frame}
 
 % ============================================================ 8. Qt
-\begin{frame}{Qt: la ventana, el loop y los controles}
+\begin{frame}[fragile]{Qt: la ventana, el loop y los controles}
     \begin{columns}[T]
         \begin{column}{0.52\textwidth}
             \footnotesize
@@ -267,11 +280,10 @@ if (uScale >= 4.0) {
             \begin{block}{Señales y slots}
                 \footnotesize Los botones se conectan a \emph{slots} del widget.
             \end{block}
-            \vspace{-0.15cm}
-            {\scriptsize\ttfamily connect(playBtn, toggled,\\
-            \hspace*{1em}view, \&GolGlWidget::setPlaying);}
-
-            \vspace{0.1cm}
+\begin{lstlisting}
+connect(playBtn, &QPushButton::toggled,
+        view, &GolGlWidget::setPlaying);
+\end{lstlisting}
             \begin{highlightbox}
                 \footnotesize
                 \textbf{Interacción:} rueda $=$ zoom, arrastre medio/dcho.\ $=$
@@ -308,24 +320,23 @@ if (uScale >= 4.0) {
     \begin{columns}[T]
         \begin{column}{0.5\textwidth}
             \begin{block}{Tarea 2 --- lo entregado}
-                \footnotesize
+                \scriptsize
                 Juego de la Vida (variante \texttt{B36/S23}) en \textbf{tres motores}:
-                \begin{itemize}\footnotesize
+                \begin{itemize}\scriptsize
                     \item \textbf{CPU} secuencial + paralelo (\texttt{std::barrier}).
                     \item \textbf{CUDA} y \textbf{OpenCL}: 1 hilo/celda, \emph{ping-pong}
                           en el \emph{device}, kernels global y \emph{shared/local}.
                     \item Verificados \textbf{bit a bit} vs.\ el oráculo CPU (y Golly).
                 \end{itemize}
-                Métrica: \textbf{celdas/s}; barridos de \texttt{block}/shared + perfilado
-                Nsight. \alert{$\sim$35--37\,Gcel/s}, $\sim$240$\times$ sobre la CPU.
+                Métrica: \textbf{celdas/s}; \alert{$\sim$35--37\,Gcel/s} ($\sim$240$\times$ CPU).
             \end{block}
         \end{column}
         \begin{column}{0.5\textwidth}
             \begin{block}{Tarea 3 --- lo que cambió}
-                \footnotesize
+                \scriptsize
                 \textbf{El núcleo no se tocó}: \texttt{Grid}, \texttt{LifeRules},
                 \texttt{ISimEngine} y los motores se reusan \emph{tal cual}.
-                \begin{itemize}\footnotesize
+                \begin{itemize}\scriptsize
                     \item \textbf{Nuevo} front-end \texttt{gol\_gui} (Qt), \emph{no} un
                           \texttt{IRenderer}: Qt es dueña del loop.
                     \item \textbf{Nuevo} \texttt{CudaGlInterop} (zero-copy) $+$ shaders
@@ -335,12 +346,11 @@ if (uScale >= 4.0) {
             \end{block}
         \end{column}
     \end{columns}
-    \vspace{0.15cm}
     \begin{highlightbox}
         \footnotesize
-        \textbf{La clave:} el patrón \emph{Strategy} de la Tarea~2 (motores
-        intercambiables tras \texttt{ISimEngine}) hizo que sumar un visor en tiempo
-        real fuera casi todo \textbf{aditivo} --- la simulación no se modificó.
+        \textbf{La clave:} el patrón \emph{Strategy} de la Tarea~2 hizo que sumar un
+        visor en tiempo real fuera casi todo \textbf{aditivo} --- la simulación no se
+        modificó.
     \end{highlightbox}
 \end{frame}
 

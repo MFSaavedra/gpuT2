@@ -15,7 +15,7 @@ uniform float uScale;     // pixels per cell (zoom)
 uniform vec2  uCenter;    // board cell shown at the screen centre (pan)
 uniform ivec2 uBoardSize; // (cols, rows)
 uniform int   uColorMode; // 0 = binary, 1 = neighbour count, 2 = age heatmap
-uniform int   uPalette;   // 0 phosphor, 1 amber, 2 grayscale (default), 3 magma, 4 ice
+uniform int   uPalette;   // 0 phosphor, 1 amber, 2 grayscale (default), 3 magma, 4 ice, 5 spectrum
 uniform float uAgeMax;    // age value mapped to the hot end of the ramp
 
 const vec3 DEAD    = vec3(0.09, 0.09, 0.11); // dead cell inside the board
@@ -25,6 +25,12 @@ const vec3 OUTSIDE = vec3(0.07, 0.07, 0.09); // outside the board
 int cellAt(ivec2 c) {
     if (c.x < 0 || c.y < 0 || c.x >= uBoardSize.x || c.y >= uBoardSize.y) return 0;
     return int(texelFetch(uBoard, c, 0).r);
+}
+
+// Fully-saturated hue at full value: h in [0,1] wraps the colour wheel.
+vec3 hsvHue(float h) {
+    vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+    return rgb;
 }
 
 // Map a scalar t in [0,1] to an RGB ramp. Every palette shares the convention
@@ -42,6 +48,10 @@ vec3 palette(int p, float t) {
         return t < 0.5 ? mix(a, b, t * 2.0) : mix(b, c, (t - 0.5) * 2.0);
     } else if (p == 4) { // ice (blue -> yellow)
         return mix(vec3(0.0, 0.12, 0.32), vec3(1.0, 0.92, 0.22), t);
+    } else if (p == 5) { // spectrum: hue red -> green -> blue at fixed brightness
+        // Unlike the ramps above (which vary luminance), this rotates hue only, so
+        // the eye separates age by colour, not shade. t=0 red (0deg) .. t=1 blue (240deg).
+        return hsvHue(t * (2.0 / 3.0));
     }
     return mix(vec3(0.0, 0.06, 0.02), vec3(0.55, 1.0, 0.6), t); // 0: phosphor (green)
 }

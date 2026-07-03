@@ -57,6 +57,7 @@ MainWindow::MainWindow(const gol::Config& cfg, QWidget* parent)
   palette->addItem("Grayscale");
   palette->addItem("Magma");
   palette->addItem("Ice");
+  palette->addItem("Spectrum"); // hue red->green->blue, for the age heatmap
   palette->setCurrentIndex(2); // default to grayscale
 
   auto* wrap = new QCheckBox("Toroidal edges");

@@ -1557,8 +1557,13 @@ looks --- a flat alive/dead binary view, a live-neighbour-count ramp (samples th
 eight neighbours straight from the texture --- free, no extra buffer), or an
 \emph{age heatmap} that colours a live cell by how many generations it has survived
 --- and a \texttt{uPalette} uniform maps the resulting scalar $t\in[0,1]$ through
-one of five colour ramps (grayscale by default, plus phosphor, amber, magma, ice).
-The age value
+one of six colour ramps (grayscale by default, plus phosphor, amber, magma, ice, and
+\emph{spectrum}). The last is aimed at the age heatmap: unlike the others, which vary
+\emph{brightness} between a dark and a light end (so on a single-hue ramp like phosphor
+or grayscale young and old cells differ only in shade and are hard to tell apart), it
+rotates \emph{hue} at fixed brightness --- red\,($t{=}0$, new) through green to
+blue\,($t{=}1$, old) --- so age is read as colour, which the eye separates far more
+readily. The age value
 comes from a second \texttt{GL\_R8UI} texture (\texttt{uAge}); see below. Finally,
 once the zoom passes $\sim$4\,px/cell the shader darkens a $\sim$1\,px border around
 each cell (derived from \texttt{fract(boardF)}) so individual cells stay legible.
@@ -1568,9 +1573,9 @@ uniform usampler2D uBoard;     // GL_R8UI: one texel per cell (0/1)
 uniform usampler2D uAge;       // GL_R8UI: per-cell generations survived (0 = dead)
 uniform float uScale;          // pixels per cell (zoom)
 uniform int   uColorMode;      // 0 binary, 1 neighbours, 2 age heatmap
-uniform int   uPalette;        // 0 phosphor .. 4 ice (2 grayscale is the default)
+uniform int   uPalette;        // 0 phosphor .. 5 spectrum (2 grayscale is the default)
 
-vec3 palette(int p, float t);  // t in [0,1] -> RGB ramp (five palettes)
+vec3 palette(int p, float t);  // t in [0,1] -> RGB ramp (six palettes)
 
 void main() {
     // ... screen pixel -> ivec2 cell (as before); out-of-board -> background ...
@@ -1654,7 +1659,7 @@ centred at runtime. The control panel's buttons, sliders, and combo boxes are pl
 Qt widgets connected to the widget's public slots with \texttt{connect(\dots)} ---
 including a \textbf{Screenshot} button, a \emph{Colour} combo (binary / neighbour
 count / age heatmap) and a \emph{Palette} combo (grayscale by default, plus phosphor /
-amber / magma / ice). A per-frame \texttt{statsChanged} signal updates the generation/FPS/zoom
+amber / magma / ice / spectrum). A per-frame \texttt{statsChanged} signal updates the generation/FPS/zoom
 labels, a \texttt{screenshotSaved} signal flashes the saved path in the status bar,
 and a one-shot \texttt{backendInfo} signal puts the active engine and present mode in
 the window title.

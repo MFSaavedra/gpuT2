@@ -59,7 +59,7 @@ public slots:
   void resetToInitial();           ///< Restore the board to generation 0 of the current pattern.
   void setSpeed(int gensPerFrame); ///< Generations advanced per displayed frame.
   void setColorMode(int mode);     ///< 0 = binary, 1 = neighbour count, 2 = age heatmap.
-  void setPalette(int palette);    ///< Colour ramp: 0 phosphor, 1 amber, 2 grayscale, 3 magma, 4 ice.
+  void setPalette(int palette);    ///< Colour ramp: 0 phosphor, 1 amber, 2 grayscale, 3 magma, 4 ice, 5 spectrum.
   void setWrapEnabled(bool wrap);  ///< Toggle bounded/toroidal edges (rebuilds the engine).
   void fitView();                  ///< Reset zoom/pan to fit the whole board.
   void loadRle(const QString& path); ///< Load an RLE pattern, stamp it centred, and upload.
