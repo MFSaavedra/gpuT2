@@ -15,7 +15,10 @@
 
 #include <CL/cl.h>
 
+#include "OclDeviceSelect.hpp"
+
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -59,43 +62,6 @@ std::string getBuildLog(cl_program program, cl_device_id device) {
   return log;
 }
 
-std::string deviceName(cl_device_id device) {
-  size_t size = 0;
-  clGetDeviceInfo(device, CL_DEVICE_NAME, 0, nullptr, &size);
-  std::string name(size, '\0');
-  if (size > 0) {
-    clGetDeviceInfo(device, CL_DEVICE_NAME, size, name.data(), nullptr);
-  }
-  while (!name.empty() && name.back() == '\0') name.pop_back();
-  return name;
-}
-
-// Prefer a GPU device on any platform; fall back to a CPU device. Same policy as
-// OpenCLEngine::chooseDevice so the hybrid pairs the host CPU with the same GPU.
-std::pair<cl_platform_id, cl_device_id> chooseDevice() {
-  cl_uint numPlatforms = 0;
-  clCheck(clGetPlatformIDs(0, nullptr, &numPlatforms), "clGetPlatformIDs(count)");
-  if (numPlatforms == 0) throw std::runtime_error("OpenCL: no platforms found");
-
-  std::vector<cl_platform_id> platforms(numPlatforms);
-  clCheck(clGetPlatformIDs(numPlatforms, platforms.data(), nullptr),
-          "clGetPlatformIDs(list)");
-
-  for (cl_device_type type : {CL_DEVICE_TYPE_GPU, CL_DEVICE_TYPE_CPU}) {
-    for (cl_platform_id platform : platforms) {
-      cl_uint numDevices = 0;
-      cl_int err = clGetDeviceIDs(platform, type, 0, nullptr, &numDevices);
-      if (err == CL_SUCCESS && numDevices > 0) {
-        std::vector<cl_device_id> devices(numDevices);
-        clCheck(clGetDeviceIDs(platform, type, numDevices, devices.data(), nullptr),
-                "clGetDeviceIDs(list)");
-        return {platform, devices[0]};
-      }
-    }
-  }
-  throw std::runtime_error("OpenCL: no GPU or CPU devices found");
-}
-
 size_t roundUp(size_t value, size_t multiple) {
   return ((value + multiple - 1) / multiple) * multiple;
 }
@@ -103,11 +69,15 @@ size_t roundUp(size_t value, size_t multiple) {
 /// @brief OpenCL-backed halo partition (see IHaloPartition for the contract).
 class OpenCLHaloPartition final : public IHaloPartition {
 public:
-  explicit OpenCLHaloPartition(int blockSize)
-      : blockSize_(blockSize < 32 ? 32 : blockSize) {
+  OpenCLHaloPartition(int blockSize, std::string deviceHint)
+      : blockSize_(blockSize < 32 ? 32 : blockSize),
+        deviceHint_(std::move(deviceHint)) {
     cl_int err = CL_SUCCESS;
-    auto [platform, device] = chooseDevice();
+    auto [platform, device] = gol::ocl::chooseDevice(deviceHint_);
+    (void)platform;
     device_ = device;
+    std::cerr << "[opencl] halo partition on: " << gol::ocl::deviceName(device)
+              << " [" << gol::ocl::deviceVendor(device) << "]\n";
 
     context_ = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &err);
     clCheck(err, "clCreateContext");
@@ -126,7 +96,7 @@ public:
     err = clBuildProgram(program, 1, &device, nullptr, nullptr, nullptr);
     if (err != CL_SUCCESS) {
       throw std::runtime_error("OpenCL halo kernel build failed on device '" +
-                               deviceName(device) + "':\n" +
+                               gol::ocl::deviceName(device) + "':\n" +
                                getBuildLog(program, device));
     }
     kernel_ = clCreateKernel(program, "life_halo", &err);
@@ -266,6 +236,7 @@ public:
 
 private:
   int blockSize_;
+  std::string deviceHint_;
   bool wrap_ = false;
   std::size_t realRows_ = 0;
   std::size_t cols_ = 0;
@@ -283,8 +254,9 @@ private:
 
 } // namespace
 
-std::unique_ptr<IHaloPartition> makeOpenCLHaloPartition(int blockSize) {
-  return std::make_unique<OpenCLHaloPartition>(blockSize);
+std::unique_ptr<IHaloPartition> makeOpenCLHaloPartition(int blockSize,
+                                                       std::string deviceHint) {
+  return std::make_unique<OpenCLHaloPartition>(blockSize, std::move(deviceHint));
 }
 
 } // namespace gol

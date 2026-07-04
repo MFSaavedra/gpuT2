@@ -2,7 +2,10 @@
 
 #include <CL/cl.h>
 
+#include "OclDeviceSelect.hpp"
+
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -51,46 +54,11 @@ std::string getBuildLog(cl_program program, cl_device_id device) {
   return log;
 }
 
+// First GPU on the first platform (then CPU) by default, but honours the
+// GOL_OCL_DEVICE environment variable so `--engine opencl` can be pinned to the
+// iGPU or the discrete card for isolated measurement (see OclDeviceSelect.hpp).
 std::pair<cl_platform_id, cl_device_id> chooseDevice() {
-  cl_uint numPlatforms = 0;
-  cl_int err = clGetPlatformIDs(0, nullptr, &numPlatforms);
-  clCheck(err, "clGetPlatformIDs(count)");
-
-  if (numPlatforms == 0) {
-    throw std::runtime_error("OpenCL: no platforms found");
-  }
-
-  std::vector<cl_platform_id> platforms(numPlatforms);
-  clCheck(clGetPlatformIDs(numPlatforms, platforms.data(), nullptr),
-          "clGetPlatformIDs(list)");
-
-  for (cl_platform_id platform : platforms) {
-    cl_uint numDevices = 0;
-    err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 0, nullptr, &numDevices);
-
-    if (err == CL_SUCCESS && numDevices > 0) {
-      std::vector<cl_device_id> devices(numDevices);
-      clCheck(clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU,
-                             numDevices, devices.data(), nullptr),
-              "clGetDeviceIDs(GPU list)");
-      return {platform, devices[0]};
-    }
-  }
-
-  for (cl_platform_id platform : platforms) {
-    cl_uint numDevices = 0;
-    err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_CPU, 0, nullptr, &numDevices);
-
-    if (err == CL_SUCCESS && numDevices > 0) {
-      std::vector<cl_device_id> devices(numDevices);
-      clCheck(clGetDeviceIDs(platform, CL_DEVICE_TYPE_CPU,
-                             numDevices, devices.data(), nullptr),
-              "clGetDeviceIDs(CPU list)");
-      return {platform, devices[0]};
-    }
-  }
-
-  throw std::runtime_error("OpenCL: no GPU or CPU devices found");
+  return gol::ocl::chooseDevice();
 }
 
 std::string deviceName(cl_device_id device) {
@@ -122,6 +90,7 @@ OpenCLEngine::OpenCLEngine(int blockSize, bool wrap, bool useShared)
   auto [platform, device] = chooseDevice();
   platform_ = platform;
   device_ = device;
+  std::cerr << "[opencl] engine on: " << deviceName(device) << "\n";
 
   cl_context context = clCreateContext(nullptr, 1, &device, nullptr, nullptr, &err);
   clCheck(err, "clCreateContext");

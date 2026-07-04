@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 #include "gol/engines/IHaloPartition.hpp"
 
@@ -17,9 +18,13 @@ namespace gol {
 
 /**
  * @brief Construct an OpenCL-backed halo partition.
- * @param blockSize Work-items per group ({32,64,128,256}); mapped onto a 32-wide local size.
+ * @param blockSize  Work-items per group ({32,64,128,256}); mapped onto a 32-wide local size.
+ * @param deviceHint Name/vendor substring to select the device ("" = first GPU;
+ *                   "intel" for the iGPU, "nvidia" for the discrete card). The
+ *                   GOL_OCL_DEVICE environment variable overrides this.
  * @return Owning pointer to the partition as an IHaloPartition.
  */
-std::unique_ptr<IHaloPartition> makeOpenCLHaloPartition(int blockSize);
+std::unique_ptr<IHaloPartition> makeOpenCLHaloPartition(int blockSize,
+                                                        std::string deviceHint = "");
 
 } // namespace gol
