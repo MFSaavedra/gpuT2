@@ -63,6 +63,33 @@ Grid runHybrid(const Grid& start, bool wrap, GpuBackend backend,
   return out;
 }
 
+// Node compositions valid for this build (each --nodes token needs its backend).
+std::vector<std::string> compositions() {
+#if defined(GOL_HAVE_CUDA) && defined(GOL_HAVE_OPENCL)
+  return {"dgpu", "igpu,dgpu", "cpu,dgpu", "cpu,igpu,dgpu"};
+#elif defined(GOL_HAVE_CUDA)
+  return {"dgpu", "cpu,dgpu"};
+#elif defined(GOL_HAVE_OPENCL)
+  return {"igpu", "igpu,dgpu-ocl", "cpu,igpu", "cpu,igpu,dgpu-ocl"};
+#else
+  return {};
+#endif
+}
+
+// Run the general (node-list) hybrid: parse `spec` into nodes, optional static
+// fractions, N generations, and reassemble.
+Grid runHybridNodes(const Grid& start, bool wrap, const std::string& spec,
+                    std::optional<std::vector<double>> fracs, unsigned threads,
+                    int gens) {
+  HybridEngine eng(threads, /*blockSize=*/128, wrap, parseHybridNodes(spec),
+                   std::move(fracs), /*calibSteps=*/5);
+  eng.upload(start);
+  for (int i = 0; i < gens; ++i) eng.step();
+  Grid out(start.rows(), start.cols());
+  eng.download(out);
+  return out;
+}
+
 } // namespace
 
 class HybridVsCpu : public ::testing::TestWithParam<bool> {};
@@ -95,6 +122,41 @@ TEST_P(HybridVsCpu, MatchesOracleAcrossSplits) {
     EXPECT_TRUE(seq == reference)
         << "hybrid (threads=1) diverged: gpu=" << backendName(backend)
         << " wrap=" << wrap;
+  }
+}
+
+// The general N-node capability (two-GPU iGPU+dGPU and 3-way): every composition
+// valid for this build must match the CPU oracle bit-for-bit -- auto-calibrated,
+// with an even static split, and at both degenerate ends where all weight lands on
+// one node (so the others get zero rows and must be filtered out).
+TEST_P(HybridVsCpu, MatchesOracleAcrossCompositions) {
+  const bool wrap = GetParam();
+  Grid start(130, 127);
+  start.randomize(20260616);
+  const Grid reference = runCpu(start, wrap, 20);
+
+  for (const std::string& spec : compositions()) {
+    const std::size_t n = parseHybridNodes(spec).size();
+
+    EXPECT_TRUE(runHybridNodes(start, wrap, spec, std::nullopt, /*threads=*/4, 20) ==
+                reference)
+        << "nodes=" << spec << " (calibrated) diverged, wrap=" << wrap;
+
+    std::vector<double> even(n, 1.0);
+    EXPECT_TRUE(runHybridNodes(start, wrap, spec, even, /*threads=*/4, 20) == reference)
+        << "nodes=" << spec << " (even split) diverged, wrap=" << wrap;
+
+    std::vector<double> firstOnly(n, 0.0);
+    firstOnly.front() = 1.0;
+    EXPECT_TRUE(runHybridNodes(start, wrap, spec, firstOnly, /*threads=*/4, 20) ==
+                reference)
+        << "nodes=" << spec << " (first-only) diverged, wrap=" << wrap;
+
+    std::vector<double> lastOnly(n, 0.0);
+    lastOnly.back() = 1.0;
+    EXPECT_TRUE(runHybridNodes(start, wrap, spec, lastOnly, /*threads=*/4, 20) ==
+                reference)
+        << "nodes=" << spec << " (last-only) diverged, wrap=" << wrap;
   }
 }
 
