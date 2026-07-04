@@ -44,10 +44,13 @@ BEST_CUDA_SHARED="${BEST_CUDA_SHARED:-0}"
 BEST_OPENCL_BLOCK="${BEST_OPENCL_BLOCK:-128}"
 BEST_OPENCL_SHARED="${BEST_OPENCL_SHARED:-0}"
 
-# Hybrid (CPU + GPU, static load balancing). The split is auto-calibrated per run.
-HYBRID_GPU="${HYBRID_GPU:-cuda}"      # GPU backend the CPU is paired with
-HYBRID_THREADS="${HYBRID_THREADS:-0}" # CPU workers for the hybrid's CPU slice (0 = all cores)
-HYBRID_CALIB="${HYBRID_CALIB:-10}"    # calibration steps per node (a-priori, off the metric)
+# Hybrid (multi-device DLT, auto-calibrated split). Sweeps a set of node
+# compositions; each writes its own CSV (the fixed 12-column schema cannot name the
+# nodes, so the composition is encoded in the filename).
+HYBRID_NODES="${HYBRID_NODES:-dgpu igpu,dgpu cpu,dgpu cpu,igpu,dgpu}" # compositions
+HYBRID_THREADS="${HYBRID_THREADS:-0}" # CPU workers for a cpu node (0 = all cores)
+HYBRID_CALIB="${HYBRID_CALIB:-30}"    # calibration steps per node (a-priori, off the metric;
+                                      # >=30 so the dGPU reaches boost clocks before the split)
 
 declare -A GENS=(
   [64]=2000 [128]=1000 [256]=500 [512]=200 [1024]=100
@@ -211,21 +214,26 @@ for n in "${SCALE_GRIDS[@]}"; do
     run_repeats "$SCALING_CSV" "$rep" "${args[@]}" || true
   fi
 
-  # Hybrid (CPU + GPU, static load balancing, auto-calibrated split). The
-  # recorded mcells exclude the calibration phase (it lands in upload, not the
-  # timed loop). Steady-state rate ~ the GPU rate, so plan repeats off that.
-  rate="$(gpu_rate_for "$HYBRID_GPU")"
+  # Hybrid (multi-device DLT, auto-calibrated split), one CSV per node composition.
+  # The recorded mcells exclude the calibration phase (it lands in upload, not the
+  # timed loop). Steady-state rate ~ the fastest node (the dGPU), so plan repeats off
+  # the CUDA rate.
+  rate="$(gpu_rate_for cuda)"
   pred="$(awk -v c="$cells" -v r="$rate" 'BEGIN{ printf "%.3f", c/r }')"
   rep="$(plan_repeats "$pred")"
 
   if [[ "$rep" -ne 0 ]]; then
-    printf '[B] hybrid N=%-5s gpu=%-6s t=%-2s G=%-4s x%s\n' \
-      "$n" "$HYBRID_GPU" "$HYBRID_THREADS" "$g" "$rep" >&2
+    for nodes in $HYBRID_NODES; do
+      safe="${nodes//,/_}"
+      hcsv="$OUTDIR/sweep_hybrid_${safe}.csv"
+      [[ -f "$hcsv" ]] || "$GOL" --csv-header > "$hcsv"
+      printf '[B] hybrid N=%-5s nodes=%-14s t=%-2s G=%-4s x%s\n' \
+        "$n" "$nodes" "$HYBRID_THREADS" "$g" "$rep" >&2
 
-    run_repeats "$SCALING_CSV" "$rep" --engine hybrid \
-      --gpu-backend "$HYBRID_GPU" --threads "$HYBRID_THREADS" \
-      --block "$BEST_CUDA_BLOCK" --calib-steps "$HYBRID_CALIB" \
-      -r "$n" -c "$n" -g "$g" || true
+      run_repeats "$hcsv" "$rep" --engine hybrid --nodes "$nodes" \
+        --threads "$HYBRID_THREADS" --block "$BEST_CUDA_BLOCK" \
+        --calib-steps "$HYBRID_CALIB" -r "$n" -c "$n" -g "$g" || true
+    done
   fi
 done
 

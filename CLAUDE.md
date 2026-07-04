@@ -7,8 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 University assignment (Tarea 2, course CC7515-1 "Computación en GPU", U. de Chile): implement
 Conway's Game of Life three times — sequential **CPU**, **CUDA**, and **OpenCL** — then benchmark
 cells-evaluated-per-second across grid sizes and report the GPU speed-up vs CPU. This branch
-(`static_load_balancing`) adds a fourth, **hybrid CPU+GPU** backend that splits the board with **static
-load balancing** (Divisible Load Theory, Barlas §11.3) — see the `HybridEngine` bullet below.
+(`static_load_balancing`) adds a fourth, **multi-device hybrid** backend (default **iGPU + dGPU**, CPU
+optional) that splits the board with **static load balancing** (Divisible Load Theory, Barlas §11.3) —
+see the `HybridEngine` bullet below.
 
 This branch (`cuda_gl_interop`) adds **Tarea 3** (option 1, "Interop – Shaders"): a real-time **Qt +
 OpenGL viewer** (`gol_gui`) for the same simulation, using **CUDA↔OpenGL interop** so the GPU-computed
@@ -64,25 +65,33 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   `--engine opencl --verify` and a `gol_opencl_tests` gtest (see Tests). Opt-in via `-DBUILD_OPENCL=ON`; on an
   NVIDIA box the platform is "NVIDIA CUDA", so it lowers through the same PTX/SASS backend as CUDA.
 
-- **HybridEngine** (`ISimEngine`) — implemented (this branch, `static_load_balancing`). Runs the **CPU
-  and a GPU together on one board**, split by rows via **static load balancing / Divisible Load Theory**
-  (Barlas §11.3). Row-wise domain decomposition: the CPU owns rows `[0,s)` (host buffers + the same
-  persistent `std::barrier` worker pool as `CpuEngine`), the GPU owns `[s,R)` (device buffers); each side
-  keeps its slice resident and ping-pongs locally, and the full board is reassembled only on
-  `download()`. Each generation they compute **concurrently** and exchange a **one-row ghost halo** at the
-  seam (and, under `--wrap`, the far edges) — the only per-step host↔device traffic. A dedicated
-  **halo kernel** (`lifeHalo` in `kernel.cu`, `life_halo` in `kernel.cl`) reads vertical neighbours from
-  ghost rows and applies only the horizontal edge rule, so it is **bit-for-bit identical to the
-  `CpuEngine` oracle in both edge modes**. The split `s` is chosen **once** — from `--cpu-frac F`
-  (an offline cost-model value) or, by default, a short **a-priori calibration phase** that times a few
-  CPU-only and GPU-only steps and picks the DLT optimum `part_gpu = R_gpu/(R_cpu+R_gpu)` — then **frozen**
-  for the whole run. The GPU side is abstracted behind `IHaloPartition` (CUDA/OpenCL impls in the gated
-  libs, selected by `--gpu-backend`); the hybrid uses the **global-memory** halo kernel only (`--shared`
-  is not applied to it). Opt-in: built whenever a GPU backend is configured. Verified via
-  `--engine hybrid --verify` and a `gol_hybrid_tests` gtest. **Finding:** on this box the GPU is ~200×
-  the CPU, so the DLT-optimal split is ~99.5% GPU and the per-step coordination overhead (ghost exchange
-  + pool wakeup for a tiny CPU share) slightly exceeds the gain — the hybrid ≈ pure GPU here, the
-  textbook DLT regime where one node dominates.
+- **HybridEngine** (`ISimEngine`) — implemented (this branch, `static_load_balancing`). Runs **several
+  compute nodes on one board together**, split by rows via **static load balancing / Divisible Load
+  Theory** (Barlas §11.3). The nodes are an **ordered list** (top to bottom) of {host **CPU** pool,
+  **CUDA dGPU**, **OpenCL dGPU**, **OpenCL iGPU**}; the **default composition is iGPU + dGPU** (the CPU is
+  negligible here and off by default), chosen with `--nodes` (tokens `cpu|dgpu|dgpu-ocl|igpu`, e.g.
+  `--nodes cpu,igpu,dgpu` for the 3-way). Each node owns a contiguous band `[a,b)` and keeps it resident
+  (CPU in host buffers + the same persistent `Barrier` worker pool as `CpuEngine`; each GPU on its
+  device), ping-ponging locally; the full board is reassembled only on `download()`. Every generation the
+  nodes compute **concurrently** (all GPU nodes launch async, an optional CPU node computes on the calling
+  thread) and exchange a **one-row ghost halo** across each adjacent seam — and, under `--wrap`, the far
+  edges — the only per-step host↔device traffic; **inter-GPU seams stage through host** (no cross-vendor
+  peer copy). A dedicated **halo kernel** (`lifeHalo` in `kernel.cu`, `life_halo` in `kernel.cl`) reads
+  vertical neighbours from ghost rows and applies only the horizontal edge rule, so every composition is
+  **bit-for-bit identical to the `CpuEngine` oracle in both edge modes**. The split is chosen **once** —
+  from explicit `--fracs` (or the legacy two-node `--cpu-frac`) or, by default, a short **a-priori
+  calibration phase** that times each node on the full board and picks the DLT optimum
+  `part_i = R_i / Σ_j R_j` — then **frozen** for the whole run. Each node is an `IHaloPartition`
+  (CUDA/OpenCL impls in the gated libs); the OpenCL partition selects its device by name/vendor substring
+  (`OclDeviceSelect.hpp`; `--ocl-device`, env `GOL_OCL_DEVICE`), so `igpu`→Intel, `dgpu-ocl`→NVIDIA. The
+  legacy two-node CPU+GPU constructor (`--gpu-backend`, `--cpu-frac`) is kept as a wrapper. Opt-in: built
+  whenever a GPU backend is configured. Verified via `--engine hybrid --verify` and a `gol_hybrid_tests`
+  gtest across compositions. **Finding:** on this box the dGPU is **~13× the iGPU** (CUDA ~28 vs
+  Intel-OpenCL ~2.1 Gcells/s), so the DLT-optimal iGPU share is **~7%**, and the per-step host-staged seam
+  exchange (plus the iGPU's higher launch/sync latency) slightly exceeds that gain — the two-GPU hybrid
+  lands a few percent **below** pure dGPU. A more balanced echo of the CPU+GPU one-node-dominated regime
+  (where the CPU share was ~0.6%). Calibration is warm-up-sensitive: 10 steps under-measure the dGPU's
+  boost clocks and over-load the iGPU; `--calib-steps 50` nearly closes the gap.
 
 - **Benchmarks** — run. `scripts/sweep.sh` drives the CPU(threads) + CUDA + OpenCL (block×shared/local)
   sweeps; on the Linux box they go to `results/linux/sweep_{gpu_opt,scaling}.csv`, and
@@ -185,16 +194,17 @@ GoogleTest is found via `find_package(GTest CONFIG)` if installed system-wide; o
 
 Strategy pattern. A backend-agnostic core (`Grid`, `Config`, patterns) plus two swappable interfaces —
 `ISimEngine` (the only thing that genuinely differs per backend) and `IRenderer` (output). The
-`HybridEngine` is itself an `ISimEngine` that *composes* a CPU slice with a GPU slice behind a third,
-internal strategy interface, `IHaloPartition` (CUDA/OpenCL impls in the gated libs) — so the hybrid
-stays free of any toolkit headers and selects the device at runtime. The application owns the loop and
-wires a chosen engine + renderer at runtime:
+`HybridEngine` is itself an `ISimEngine` that *composes* an ordered list of nodes — an optional CPU slice
+plus one or more GPU slices — behind a third, internal strategy interface, `IHaloPartition` (CUDA/OpenCL
+impls in the gated libs) — so the hybrid stays free of any toolkit headers and selects each device at
+runtime. The application owns the loop and wires a chosen engine + renderer at runtime:
 
 ```
 gol (headless app: main loop, Config/CLI)
   |-- ISimEngine   <- CpuEngine | CudaEngine | OpenCLEngine | HybridEngine
-  |                     '-- HybridEngine drives a CPU slice + an IHaloPartition
-  |                         (<- CudaHaloPartition | OpenCLHaloPartition) GPU slice
+  |                     '-- HybridEngine drives an ordered list of nodes: an optional
+  |                         CPU slice + one or more IHaloPartition GPU slices
+  |                         (<- CudaHaloPartition | OpenCLHaloPartition, per --nodes)
   |-- IRenderer    <- NullRenderer | TextRenderer | AnsiRenderer
   '-- Grid + Patterns (shared, backend-agnostic)
 
@@ -256,13 +266,14 @@ always links the CPU engine, and when `BUILD_CUDA` is also on it builds the `gol
 Layout (parenthesised notes are clarifications — header-only units, directory contents):
 
 ```
-include/gol/   Grid.hpp ISimEngine.hpp IRenderer.hpp Config.hpp LifeRules.hpp Timer.hpp Barrier.hpp
+include/gol/   Grid.hpp ISimEngine.hpp IRenderer.hpp Config.hpp LifeRules.hpp Timer.hpp Barrier.hpp HybridNode.hpp
                engines/CpuEngine.hpp  render/NullRenderer.hpp render/TextRenderer.hpp render/AnsiRenderer.hpp
                render/CudaGlInterop.hpp  gui/GolGlWidget.hpp gui/MainWindow.hpp
                patterns/Pattern.hpp patterns/RleLoader.hpp
 src/core/      Config.cpp main.cpp                         (Grid/LifeRules/Timer are header-only)
 src/engines/   cpu/CpuEngine.cpp  cuda/CudaEngine.cu cuda/kernel.cu  opencl/OpenCLEngine.cpp opencl/kernel.cl
                hybrid/HybridEngine.cpp  cuda/CudaHaloPartition.cu  opencl/OpenCLHaloPartition.cpp
+               opencl/OclDeviceSelect.hpp                 (shared iGPU/dGPU device-selection helper)
 include/gol/engines/  CudaEngine.hpp  cuda/kernel.cuh  OpenCLEngine.hpp
                IHaloPartition.hpp  HybridEngine.hpp  cuda/CudaHaloPartition.hpp  opencl/OpenCLHaloPartition.hpp
 src/render/    TextRenderer.cpp AnsiRenderer.cpp           (NullRenderer is header-only)
@@ -335,12 +346,16 @@ In dependency order (`CpuEngine` is the oracle, so it is verified first):
    `gol_opencl_tests` under `-DBUILD_OPENCL=ON` — and each needs its GPU/OpenCL device at run time.
 
 5. **Hybrid equivalence** — done. `hybrid_equivalence_test.cpp` asserts the `HybridEngine` matches the
-   `CpuEngine` oracle bit-for-bit across CPU fractions {0, 0.25, 0.5, 0.75, 1} (the 0 and 1 ends exercise
-   the degenerate pure-GPU / pure-CPU paths), an auto-calibrated split, sequential vs parallel CPU
-   slices, and both edge modes, on a non-divisible grid (so the split lands mid-block). It also covers a
-   birth-on-6 case straddling the seam, the no-step round-trip, and reuse across sizes — for every GPU
-   backend compiled in. Built as `gol_hybrid_tests` whenever the hybrid engine is configured; needs a
-   GPU/OpenCL device at run time.
+   `CpuEngine` oracle bit-for-bit in two ways. The legacy CPU+GPU path: across CPU fractions
+   {0, 0.25, 0.5, 0.75, 1} (the 0 and 1 ends exercise the degenerate pure-GPU / pure-CPU paths), an
+   auto-calibrated split, and sequential vs parallel CPU slices. The general N-node path
+   (`MatchesOracleAcrossCompositions`): for every node composition valid in the build (`dgpu`,
+   `igpu,dgpu`, `cpu,dgpu`, `cpu,igpu,dgpu`) — auto-calibrated, an even static split, and both degenerate
+   ends where all weight lands on one node (so the others get zero rows and are filtered) — exercising the
+   two-GPU and 3-way multi-seam ghost exchange. Both cover both edge modes on a non-divisible grid (so the
+   split lands mid-block); plus a birth-on-6 case straddling the seam, the no-step round-trip, and reuse
+   across sizes. Built as `gol_hybrid_tests` whenever the hybrid engine is configured; needs the
+   GPU/OpenCL device(s) at run time (the iGPU+dGPU compositions need both an Intel OpenCL device and CUDA).
 
 **Golly as an external oracle.** Golly is installed locally, including the headless `bgolly` runner
 (infinite grid, no edge effects). It runs our exact rule (`B36/S23`), so it is a second, independent

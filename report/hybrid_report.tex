@@ -15,7 +15,7 @@
 
 % INFORMACIÓN DEL DOCUMENTO
 \def\documenttitle {Static Load Balancing for a CPU\,+\,GPU Stencil}
-\def\documentsubtitle {Hybrid CPU+GPU load balancing: results and a verdict}
+\def\documentsubtitle {Static load balancing across CPU, iGPU and dGPU: a verdict}
 \def\documentsubject {Computación en GPU}
 
 \def\documentauthor {Matías Saavedra}
@@ -255,18 +255,19 @@ at $N=16384$: the DLT-optimal split saves the GPU $\sim$0.6\,\% of its time
 $\sim$0.6--1\,ms --- a clear net loss that only looks like break-even because the halo
 kernel's own speed-up cancels it.
 
-\subsection{OpenCL regressed to the pathological ICD path (environment, not code)}
+\subsection{The apparent ``OpenCL regression'' was the integrated GPU}
 \label{sec:opencl}
 
-This Linux box previously measured OpenCL at $\sim$37\,Gcells/s, on par with CUDA
-(both lower through the same PTX/SASS on NVIDIA). This run measured 1.70\,Gcells/s ---
-reproducible on a single clean \texttt{--engine opencl} run, $\sim$14.7$\times$ below
-CUDA. The \texttt{--engine opencl} code is unchanged on this branch, the GPU is
-healthy for CUDA, and the slowdown is OpenCL-specific, so this is the driver/ICD
-pathology previously seen for Windows, now affecting this Linux session. The action
-item: the OpenCL rows in this sweep are not representative; reboot and re-run before
-regenerating any committed OpenCL figures or trusting the OpenCL column. The hybrid
-sweep used \texttt{--gpu-backend cuda}, so it is unaffected.
+This box previously measured OpenCL at $\sim$37\,Gcells/s, on par with CUDA (both
+lower through the same PTX/SASS on NVIDIA). A later sweep measured 1.7\,Gcells/s and
+was first recorded as a driver/ICD regression. It was not. With explicit device
+pinning (the \texttt{GOL\_OCL\_DEVICE} environment variable, added in
+\texttt{OclDeviceSelect.hpp}), the 1.7\,Gcells/s figure is the Intel UHD~630
+integrated GPU, which the default device selection picks because it enumerates as
+OpenCL platform~0. Pinned to NVIDIA, OpenCL runs at $\sim$23--28\,Gcells/s, matching
+CUDA. So there was no regression and no reboot is needed --- only a silent device
+choice. This reframes the exercise: the ``slow OpenCL'' was a second, real GPU
+sitting idle, which motivates the two-GPU split of \S\ref{sec:twogpu}.
 
 \subsection{GPU run-to-run variance is $\sim$10--25\,\%}
 \label{sec:variance}
@@ -283,6 +284,42 @@ and treat sub-10\,\% differences at small grids as noise.
 \texttt{--block 512} fails OpenCL with \texttt{CL\_INVALID\_WORK\_GROUP\_SIZE} (code
 $-54$) on this device (CUDA runs 512 fine). The sweep skips it gracefully; it is a
 device limit, not a regression. Block 64--128 is optimal on both engines anyway.
+
+\section{From CPU+GPU to iGPU+dGPU}
+\label{sec:twogpu}
+
+The negligible-CPU verdict says the CPU is the wrong second node; the corrected
+OpenCL finding (\S\ref{sec:opencl}) supplies a better one --- the Intel UHD~630
+integrated GPU, reachable only through OpenCL. The engine was generalized from a
+fixed [CPU, GPU] pair to an ordered list of nodes, each a CPU pool, a CUDA
+discrete-GPU partition, or an OpenCL partition pinned to a chosen device, split by the
+same DLT rule $\mathit{part}_i = R_i / \sum_j R_j$. The default composition is
+iGPU\,$+$\,dGPU, with the CPU off by default. Adjacent nodes exchange the same
+one-row ghost halo; inter-GPU seams stage through host memory, as there is no
+cross-vendor peer copy. Every composition (\texttt{igpu,dgpu}, \texttt{cpu,dgpu}, the
+three-way \texttt{cpu,igpu,dgpu}) still verifies bit-for-bit against the CPU oracle in
+both edge modes.
+
+The regime is more balanced than CPU+GPU, but still one-sided. Calibrated on this
+box, $R_\text{iGPU} \approx 2.1$\,Gcells/s against $R_\text{dGPU} \approx 28$\,Gcells/s
+(CUDA), so the DLT-optimal iGPU share is $\sim$7\,\% --- an order of magnitude larger
+than the CPU's 0.6\,\%, but still small. At $N=8192$ the auto-calibrated
+iGPU\,$+$\,dGPU hybrid reaches $\sim$27\,Gcells/s against pure dGPU's $\sim$28: a few
+percent below, never above. The per-step host-staged seam exchange --- two
+device-to-host reads and two host-to-device writes of a $C$-byte row --- plus the
+integrated GPU's higher launch and synchronization latency slightly exceed the
+$\sim$7\,\% of compute the iGPU adds.
+
+Two practical notes. The split is sensitive to calibration length: ten steps
+under-measure the discrete GPU because its boost clocks have not ramped, so the DLT
+split hands the weak iGPU too many rows and the iGPU becomes the bottleneck;
+\texttt{--calib-steps 50} nearly closes the gap. And the run-to-run variance
+(\S\ref{sec:variance}) is comparable to the $\sim$7\,\% at stake, so the sub-dGPU
+margin sits at the edge of measurability. The verdict matches the CPU+GPU case: the
+DLT machinery is correct, but on a node pair this lopsided the communication cost eats
+the minority node's contribution. A two-GPU win would need devices within a small
+factor of each other, or a decomposition whose seam does not cross the host boundary
+every step.
 
 \section{Conclusion: does static load balancing pay off here?}
 \label{sec:conclusion}
@@ -302,6 +339,10 @@ for a win.
 	exchange $+$ pool wakeup $+$ sync exceed that. The hybrid ranges from $-29$\,\%
 	(small/mid $N$, overhead dominated) to break-even (large $N$, overhead
 	amortized). It never meaningfully beats pure GPU.
+	\item The same holds one step up the device hierarchy. Replacing the CPU with the
+	idle integrated GPU (\S\ref{sec:twogpu}) raises the minority share from 0.6\,\% to
+	$\sim$7\,\%, but the host-staged inter-GPU seam still costs more than that, so
+	iGPU\,$+$\,dGPU lands a few percent below pure dGPU --- more balanced, same verdict.
 	\item The only speed-up in the data is a kernel-engineering side effect. The
 	ghost-cell halo kernel, built to make domain decomposition possible, is
 	incidentally 10--16\,\% faster than the original global kernel at large $N$

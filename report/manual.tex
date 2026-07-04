@@ -170,8 +170,9 @@ runtime from the parsed configuration.
 \begin{sourcecode}{plaintext}{The strategy layout of the headless app.}
 Application (main.cpp)  -- owns the loop + Config/CLI
   |-- ISimEngine   <- CpuEngine | CudaEngine | OpenCLEngine | HybridEngine
-  |                     '-- HybridEngine = CPU slice + IHaloPartition GPU slice
-  |                         (<- CudaHaloPartition | OpenCLHaloPartition)
+  |                     '-- HybridEngine = ordered nodes: optional CPU slice +
+  |                         >=1 IHaloPartition GPU slices, default iGPU+dGPU
+  |                         (<- CudaHaloPartition | OpenCLHaloPartition, per --nodes)
   |-- IRenderer    <- NullRenderer | TextRenderer | AnsiRenderer
   '-- Grid + Pattern  (shared, backend-agnostic state & seed data)
 \end{sourcecode}
@@ -240,6 +241,7 @@ and impose no link dependency.
 		\texttt{include/gol/engines/OpenCLEngine.hpp} & OpenCL engine declaration & \ref{sec:opencl} \\
 		\texttt{include/gol/engines/IHaloPartition.hpp} & GPU partition strategy iface (HO) & \ref{sec:hybrid} \\
 		\texttt{include/gol/engines/HybridEngine.hpp} & Hybrid engine declaration & \ref{sec:hybrid} \\
+		\texttt{include/gol/HybridNode.hpp}      & Hybrid node descriptor (HO) & \ref{sec:hybrid} \\
 		\texttt{include/gol/engines/cuda/CudaHaloPartition.hpp} & CUDA partition factory (HO) & \ref{sec:hybrid} \\
 		\texttt{include/gol/engines/opencl/OpenCLHaloPartition.hpp} & OpenCL partition factory (HO) & \ref{sec:hybrid} \\
 		\texttt{include/gol/render/NullRenderer.hpp} & No-op renderer (HO) & \ref{sec:render} \\
@@ -257,6 +259,7 @@ and impose no link dependency.
 		\texttt{src/engines/hybrid/HybridEngine.cpp} & Hybrid engine + load balancing & \ref{sec:hybrid} \\
 		\texttt{src/engines/cuda/CudaHaloPartition.cu} & CUDA halo partition impl & \ref{sec:hybrid} \\
 		\texttt{src/engines/opencl/OpenCLHaloPartition.cpp} & OpenCL halo partition impl & \ref{sec:hybrid} \\
+		\texttt{src/engines/opencl/OclDeviceSelect.hpp} & OpenCL device selection (HO) & \ref{sec:hybrid} \\
 		\texttt{src/patterns/RleLoader.cpp}      & RLE decoding & \ref{sec:patterns} \\
 		\texttt{src/patterns/Pattern.cpp}        & Stamping a pattern onto a grid & \ref{sec:patterns} \\
 		\texttt{src/render/TextRenderer.cpp}     & ASCII frame dump & \ref{sec:render} \\
@@ -1271,6 +1274,34 @@ about the pure-GPU rate rather than beating it --- the regime \S11.3
 describes when a node is too slow to be worth a share. The mechanism is general,
 though: the closer the two throughputs, the more the hybrid wins, up to the DLT
 ceiling $R_{\text{cpu}}+R_{\text{gpu}}$.
+
+\subsection{Generalization to an ordered list of nodes (iGPU + dGPU)}
+\label{sec:hybrid-multi}
+
+The engine above is written for one CPU slice and one GPU partition, but the same
+machinery generalizes to any ordered list of nodes. A node is a CPU pool, a CUDA
+discrete-GPU partition, or an OpenCL partition pinned to a chosen device; the
+\texttt{--nodes} flag names them (tokens \texttt{cpu}, \texttt{dgpu},
+\texttt{dgpu-ocl}, \texttt{igpu}), and the default composition on this box is
+\texttt{igpu,dgpu} --- the integrated Intel GPU plus the discrete NVIDIA GPU, with the
+CPU off. Each node owns a contiguous band, the split is the same DLT optimum
+$\mathit{part}_i = R_i / \sum_j R_j$ from per-node calibration, and the one-row ghost
+halo is exchanged across every adjacent seam (inter-GPU seams stage through host
+memory, since there is no cross-vendor peer copy). All GPU nodes launch asynchronously
+and run concurrently while an optional CPU node computes on the calling thread. The
+OpenCL partition chooses its device by a name/vendor substring
+(\texttt{OclDeviceSelect.hpp}; \texttt{GOL\_OCL\_DEVICE} or \texttt{--ocl-device}), so
+\texttt{igpu} selects the Intel device and \texttt{dgpu-ocl} the NVIDIA one. Every
+composition still matches the \texttt{CpuEngine} oracle bit-for-bit in both edge modes;
+the legacy two-node \texttt{--gpu-backend}/\texttt{--cpu-frac} constructor is kept as a
+wrapper.
+
+The verdict carries over. The discrete GPU is about 13 times the integrated GPU here
+(CUDA at $\sim$28 versus Intel OpenCL at $\sim$2.1\,Gcells/s), so the DLT-optimal iGPU
+share is $\sim$7\,\% --- larger than the CPU's 0.6\,\% but still small, and the
+host-staged inter-GPU seam plus the integrated GPU's higher launch latency slightly
+exceed it, so \texttt{igpu,dgpu} lands a few percent below pure dGPU. The standalone
+\texttt{report/hybrid\_report.tex} analyses this in full.
 
 \section{The pattern pipeline --- \texttt{RleLoader.cpp} and \texttt{Pattern.cpp}}
 \label{sec:patterns}
