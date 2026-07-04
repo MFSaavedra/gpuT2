@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 /**
  * @file Config.hpp
@@ -99,7 +100,27 @@ struct Config {
   unsigned calibSteps = 10;
 
   /// @brief Hybrid engine: GPU backend to pair with the CPU ("auto"|"cuda"|"opencl").
+  ///        Legacy two-node knob; superseded by @ref hybridNodes.
   std::string hybridGpu = "auto";
+
+  /**
+   * @brief Hybrid engine: ordered node composition (e.g. "igpu,dgpu").
+   *
+   * Comma-separated tokens `cpu`, `dgpu` (CUDA), `dgpu-ocl` (OpenCL/NVIDIA),
+   * `igpu` (OpenCL/Intel). Empty = the build's default (iGPU+dGPU when both
+   * backends are compiled). When set, this supersedes @ref hybridGpu / @ref cpuFrac.
+   */
+  std::string hybridNodes;
+
+  /**
+   * @brief Hybrid engine: explicit per-node row fractions (matches @ref hybridNodes
+   *        order). nullopt = auto-calibrate the split.
+   */
+  std::optional<std::vector<double>> hybridFracs;
+
+  /// @brief Hybrid/OpenCL: device name/vendor substring override for OpenCL nodes
+  ///        (also settable via the GOL_OCL_DEVICE environment variable).
+  std::string oclDevice;
 };
 
 /**

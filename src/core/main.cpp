@@ -99,11 +99,27 @@ std::unique_ptr<ISimEngine> makeEngine(const Config& cfg) {
 #endif
 #ifdef GOL_HAVE_HYBRID
     case EngineKind::Hybrid: {
-      GpuBackend backend = GpuBackend::Auto;
-      if (cfg.hybridGpu == "cuda") backend = GpuBackend::Cuda;
-      else if (cfg.hybridGpu == "opencl") backend = GpuBackend::OpenCL;
+      // Legacy CPU+GPU path when only the old knobs are used (no --nodes).
+      const bool legacy = cfg.hybridNodes.empty() &&
+                          (cfg.cpuFrac.has_value() || cfg.hybridGpu != "auto");
+      if (legacy) {
+        GpuBackend backend = GpuBackend::Auto;
+        if (cfg.hybridGpu == "cuda") backend = GpuBackend::Cuda;
+        else if (cfg.hybridGpu == "opencl") backend = GpuBackend::OpenCL;
+        return std::make_unique<HybridEngine>(cfg.threads, cfg.blockSize, cfg.wrap,
+                                              backend, cfg.cpuFrac, cfg.calibSteps);
+      }
+      std::vector<HybridNode> nodes = cfg.hybridNodes.empty()
+          ? defaultHybridNodes()
+          : parseHybridNodes(cfg.hybridNodes);
+      if (!cfg.oclDevice.empty()) {
+        for (auto& n : nodes) {
+          if (n.kind == NodeKind::OpenCL) n.deviceHint = cfg.oclDevice;
+        }
+      }
       return std::make_unique<HybridEngine>(cfg.threads, cfg.blockSize, cfg.wrap,
-                                            backend, cfg.cpuFrac, cfg.calibSteps);
+                                            std::move(nodes), cfg.hybridFracs,
+                                            cfg.calibSteps);
     }
 #endif
     default:
@@ -123,10 +139,13 @@ std::string backendConfig(const Config& cfg) {
       return "block=" + std::to_string(cfg.blockSize) +
              (cfg.useShared ? " local" : " no-local");
     case EngineKind::Hybrid:
-      return "gpu=" + cfg.hybridGpu + " block=" + std::to_string(cfg.blockSize) +
+      return "nodes=" +
+             (cfg.hybridNodes.empty() ? std::string("default") : cfg.hybridNodes) +
+             " block=" + std::to_string(cfg.blockSize) +
              " threads=" + std::to_string(cfg.threads) +
-             (cfg.cpuFrac ? " cpu-frac=" + std::to_string(*cfg.cpuFrac)
-                          : " auto-split");
+             (cfg.hybridFracs ? std::string(" fixed-fracs")
+              : cfg.cpuFrac ? " cpu-frac=" + std::to_string(*cfg.cpuFrac)
+                            : std::string(" auto-split"));
     default:
       return "";
   }
@@ -137,19 +156,29 @@ std::string backendConfig(const Config& cfg) {
 void printHybridInfo(const ISimEngine& engine) {
   const auto* h = dynamic_cast<const HybridEngine*>(&engine);
   if (!h) return;
-  std::cout << "split:      cpu=" << h->cpuRows() << " rows ("
-            << std::fixed << std::setprecision(1) << (h->cpuFraction() * 100.0)
-            << "%)  gpu=" << h->gpuRows() << " rows ("
-            << ((1.0 - h->cpuFraction()) * 100.0) << "%)  [" << h->gpuName() << "]\n";
+  const auto reports = h->nodeReports();
+  std::size_t total = 0;
+  for (const auto& r : reports) total += r.rows;
+  std::cout << "split:     ";
+  for (const auto& r : reports) {
+    const double pct = total ? 100.0 * static_cast<double>(r.rows) /
+                                   static_cast<double>(total)
+                             : 0.0;
+    std::cout << " " << r.label << "=" << r.rows << " rows (" << std::fixed
+              << std::setprecision(1) << pct << "%)";
+  }
+  std::cout << "  [" << h->gpuName() << "]\n";
   if (h->calibrated()) {
-    const double cpuM = h->cpuRate() / 1e6;
-    const double gpuM = h->gpuRate() / 1e6;
-    std::cout << std::setprecision(1)
-              << "calib:      R_cpu=" << cpuM << " Mcells/s  R_gpu=" << gpuM
-              << " Mcells/s  DLT bound R_cpu+R_gpu=" << (cpuM + gpuM)
-              << " Mcells/s\n";
+    double bound = 0.0;
+    std::cout << "calib:     ";
+    for (const auto& r : reports) {
+      std::cout << " R_" << r.label << "=" << std::fixed << std::setprecision(1)
+                << (r.rate / 1e6);
+      bound += r.rate;
+    }
+    std::cout << " Mcells/s  DLT bound=" << (bound / 1e6) << " Mcells/s\n";
   } else {
-    std::cout << "calib:      (skipped -- static --cpu-frac)\n";
+    std::cout << "calib:      (skipped -- static fractions)\n";
   }
 }
 #endif

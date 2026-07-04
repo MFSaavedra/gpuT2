@@ -39,8 +39,12 @@ namespace {
       "      --shared         GPU shared-memory tiling\n"
       "      --cpu-frac F     hybrid: fixed CPU row fraction in [0,1]\n"
       "                       (default: auto-calibrate the split)\n"
-      "      --gpu-backend N  hybrid: auto | cuda | opencl  (default auto)\n"
+      "      --gpu-backend N  hybrid: auto | cuda | opencl  (default auto; legacy)\n"
       "      --calib-steps N  hybrid: calibration steps per node (default 10)\n"
+      "      --nodes LIST     hybrid: ordered nodes cpu|dgpu|dgpu-ocl|igpu\n"
+      "                       (default igpu,dgpu; supersedes --gpu-backend/--cpu-frac)\n"
+      "      --fracs F,F,...  hybrid: explicit per-node row fractions (matches --nodes)\n"
+      "      --ocl-device SUB opencl device name/vendor substring (or GOL_OCL_DEVICE)\n"
       "      --profile        print upload/compute/download timing breakdown\n"
       "      --csv            print one CSV data row instead of the human summary\n"
       "      --csv-header     print the CSV header line and exit (for sweep scripts)\n"
@@ -142,6 +146,23 @@ Config parse(int argc, char** argv) {
       else { std::cerr << "error: unknown gpu-backend '" << v << "'\n"; usageAndExit(2); }
     } else if (arg == "--calib-steps") {
       cfg.calibSteps = static_cast<unsigned>(toULL(nextValue(argc, argv, i, "--calib-steps"), "--calib-steps"));
+    } else if (arg == "--nodes") {
+      cfg.hybridNodes = nextValue(argc, argv, i, "--nodes");
+    } else if (arg == "--ocl-device") {
+      cfg.oclDevice = nextValue(argc, argv, i, "--ocl-device");
+    } else if (arg == "--fracs") {
+      const std::string v = nextValue(argc, argv, i, "--fracs");
+      std::vector<double> fracs;
+      std::size_t start = 0;
+      while (start <= v.size()) {
+        const std::size_t comma = v.find(',', start);
+        const std::string tok =
+            v.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        if (!tok.empty()) fracs.push_back(toDouble(tok, "--fracs"));
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+      }
+      cfg.hybridFracs = std::move(fracs);
     } else if (arg == "--verify") {
       cfg.verify = true;
     } else if (arg == "--csv") {
