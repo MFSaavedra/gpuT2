@@ -86,12 +86,17 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   (`OclDeviceSelect.hpp`; `--ocl-device`, env `GOL_OCL_DEVICE`), so `igpu`→Intel, `dgpu-ocl`→NVIDIA. The
   legacy two-node CPU+GPU constructor (`--gpu-backend`, `--cpu-frac`) is kept as a wrapper. Opt-in: built
   whenever a GPU backend is configured. Verified via `--engine hybrid --verify` and a `gol_hybrid_tests`
-  gtest across compositions. **Finding:** on this box the dGPU is **~13× the iGPU** (CUDA ~28 vs
-  Intel-OpenCL ~2.1 Gcells/s), so the DLT-optimal iGPU share is **~7%**, and the per-step host-staged seam
-  exchange (plus the iGPU's higher launch/sync latency) slightly exceeds that gain — the two-GPU hybrid
-  lands a few percent **below** pure dGPU. A more balanced echo of the CPU+GPU one-node-dominated regime
-  (where the CPU share was ~0.6%). Calibration is warm-up-sensitive: 10 steps under-measure the dGPU's
-  boost clocks and over-load the iGPU; `--calib-steps 50` nearly closes the gap.
+  gtest across compositions. **Finding (fraction sweep, best-of-5):** the dGPU is **~15× the iGPU**
+  (dGPU-halo ~31 vs Intel-OpenCL ~2.1 Gcells/s), so the DLT-optimal iGPU share is **~5–6%** (naive DLT
+  `R_i/ΣR ≈ 6.3%`; the empirical optimum is slightly lower because the fixed seam + iGPU launch latency
+  cut its effective rate). The ghost seam is a **fixed one row** while compute grows as N², so the
+  per-step communication vanishes as ~1/N: a **well-chosen static split beats pure dGPU by a margin that
+  grows with the grid** — +0.8% at 8192² → **+5.6% at 32768²**, reaching **~99% of the R_iGPU+R_dGPU
+  ceiling** (pure dGPU sits at ~94%). At small N the seam still dominates (≈ pure dGPU) — the earlier
+  "a few % below" reading was only measured at N≤16384, inside the boost noise. The default
+  **auto-calibration overshoots** the optimum (naive rates, boost-warmup-biased) into the cliff, so the
+  win currently needs a hand-set `--fracs 0.05,0.95`; `--calib-steps 50` helps but doesn't cure it. Full
+  analysis + figure: `report/hybrid_report.tex` §"From CPU+GPU to iGPU+dGPU".
 
 - **Benchmarks** — run. `scripts/sweep.sh` drives the CPU(threads) + CUDA + OpenCL (block×shared/local)
   sweeps; on the Linux box they go to `results/linux/sweep_{gpu_opt,scaling}.csv`, and

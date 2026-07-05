@@ -57,20 +57,24 @@
 
 % RESUMEN O ABSTRACT
 \begin{abstractd}
-	The \texttt{HybridEngine} runs the CPU and the GPU together on one Game of
-	Life board (HighLife, \texttt{B36/S23}), split by rows with Divisible Load
-	Theory (DLT, Barlas \S11.3). This report analyses a full benchmark sweep on a
-	GTX~1660~Ti Max-Q paired with a 12-thread CPU. The hybrid is correct and the
-	DLT split lands exactly where the theory predicts ($\sim$99.4\,\% GPU /
-	0.6\,\% CPU), but the GPU is $\sim$160$\times$ the CPU, so the load-balancing
-	ceiling is a $\sim$0.6\,\% speed-up --- smaller than the per-step coordination
-	cost. The hybrid therefore does not beat pure GPU here. A raw reading of the
-	sweep looks like it does at large $N$; that turned out to be a confound --- the
-	hybrid runs a faster, branch-free GPU kernel than the standalone CUDA engine.
-	Controlling for the kernel, load balancing is a net loss at small/mid $N$ and
-	break-even at large $N$. The real performance lever the exercise surfaced is the
-	halo kernel, not the balancing. We also document an OpenCL driver regression seen
-	during the run.
+	The \texttt{HybridEngine} runs several compute nodes on one Game of Life board
+	(HighLife, \texttt{B36/S23}), split by rows with Divisible Load Theory (DLT, Barlas
+	\S11.3). This report analyses static load balancing on a GTX~1660~Ti Max-Q, first
+	paired with a 12-thread CPU and then with the machine's Intel UHD~630 integrated GPU.
+	The CPU+GPU pair is a textbook ``one node dominates'' regime: the GPU is
+	$\sim$160$\times$ the CPU, so the DLT-optimal CPU share is 0.6\,\% and the balancing
+	ceiling is smaller than the per-step coordination cost --- the hybrid does not beat
+	pure GPU, and a raw sweep that appears to is a kernel confound (the hybrid runs a
+	faster, branch-free halo kernel). The apparent ``OpenCL regression'' seen during that
+	run was a misdiagnosis: the slow 1.7\,Gcells/s figure is the integrated GPU, which the
+	default OpenCL selection picks as platform~0, not a driver fault. Reusing that idle
+	iGPU as a genuine second DLT node changes the verdict. Because the inter-node seam is
+	a single fixed row while compute grows as $N^2$, the communication cost vanishes as
+	$1/N$: a well-chosen static iGPU\,$+$\,dGPU split beats pure dGPU by a margin that
+	grows with the grid, reaching $+5.6\,\%$ at $N=32768$ and 99\,\% of the
+	$R_\text{iGPU}+R_\text{dGPU}$ ceiling. The prize predicted by DLT is real once the
+	load is large enough to amortize the seam --- though the default auto-calibration
+	still overshoots the optimum.
 \end{abstractd}
 
 % TABLA DE CONTENIDOS - ÍNDICE
@@ -149,9 +153,11 @@ The headlines from the table:
 	\item CUDA is $\sim$160--230$\times$ the CPU, peaking $\sim$32\,Gcells/s at
 	$N\approx2048$--$4096$, then easing to $\sim$25 at $N=16384$ (larger working sets
 	spill L2, so the kernel becomes more memory-bound).
-	\item OpenCL came out anomalous (see \S\ref{sec:opencl}). At 1.7\,Gcells/s it is
-	$\sim$15$\times$ below CUDA, which is not representative of this hardware, and is
-	excluded from the conclusions.
+	\item The ``OpenCL'' column reads 1.7\,Gcells/s, $\sim$15$\times$ below CUDA. This is
+	not a slow NVIDIA path but the Intel UHD~630 integrated GPU, which the default OpenCL
+	selection picks as platform~0 (see \S\ref{sec:opencl}); pinned to NVIDIA, OpenCL
+	matches CUDA. That idle iGPU becomes the second node of the two-GPU study
+	(\S\ref{sec:twogpu}).
 \end{itemize}
 
 \section{The load-balancing split (DLT \S11.3)}
@@ -202,7 +208,8 @@ above the GPU alone. That is the entire prize, and it is tiny.
 
 \insertimage{hybrid_load_balancing}{width=\linewidth}{Hybrid scaling. Left (log--log,
 all backends): the GPU backends sit $\sim$160--230$\times$ above the flat CPU line;
-the anomalous OpenCL curve hugs $\sim$1.7\,Gcells/s. Right (GPU band): CUDA
+the OpenCL curve at $\sim$1.7\,Gcells/s is the Intel iGPU (the default OpenCL device),
+not a slow NVIDIA path. Right (GPU band): CUDA
 (\texttt{life\_global}) peaks early then sags; the halo kernel holds
 $\sim$29\,Gcells/s at large $N$; the auto-split hybrid climbs from far below toward
 the GPU band as the per-step overhead amortizes, only catching up near $N=16384$.}
@@ -292,40 +299,121 @@ The negligible-CPU verdict says the CPU is the wrong second node; the corrected
 OpenCL finding (\S\ref{sec:opencl}) supplies a better one --- the Intel UHD~630
 integrated GPU, reachable only through OpenCL. The engine was generalized from a
 fixed [CPU, GPU] pair to an ordered list of nodes, each a CPU pool, a CUDA
-discrete-GPU partition, or an OpenCL partition pinned to a chosen device, split by the
-same DLT rule $\mathit{part}_i = R_i / \sum_j R_j$. The default composition is
-iGPU\,$+$\,dGPU, with the CPU off by default. Adjacent nodes exchange the same
-one-row ghost halo; inter-GPU seams stage through host memory, as there is no
-cross-vendor peer copy. Every composition (\texttt{igpu,dgpu}, \texttt{cpu,dgpu}, the
-three-way \texttt{cpu,igpu,dgpu}) still verifies bit-for-bit against the CPU oracle in
-both edge modes.
+discrete-GPU partition, or an OpenCL partition pinned to a chosen device. The default
+composition is iGPU\,$+$\,dGPU, with the CPU off by default; adjacent nodes exchange
+the same one-row ghost halo, and inter-GPU seams stage through host memory (there is no
+cross-vendor peer copy). Every composition (\texttt{igpu,dgpu}, \texttt{cpu,dgpu}, the
+three-way \texttt{cpu,igpu,dgpu}) verifies bit-for-bit against the CPU oracle in both
+edge modes.
 
-The regime is more balanced than CPU+GPU, but still one-sided. Calibrated on this
-box, $R_\text{iGPU} \approx 2.1$\,Gcells/s against $R_\text{dGPU} \approx 28$\,Gcells/s
-(CUDA), so the DLT-optimal iGPU share is $\sim$7\,\% --- an order of magnitude larger
-than the CPU's 0.6\,\%, but still small. At $N=8192$ the auto-calibrated
-iGPU\,$+$\,dGPU hybrid reaches $\sim$27\,Gcells/s against pure dGPU's $\sim$28: a few
-percent below, never above. The per-step host-staged seam exchange --- two
-device-to-host reads and two host-to-device writes of a $C$-byte row --- plus the
-integrated GPU's higher launch and synchronization latency slightly exceed the
-$\sim$7\,\% of compute the iGPU adds.
+\subsection{The DLT model, applied}
+\label{sec:twogpu-model}
 
-Two practical notes. The split is sensitive to calibration length: ten steps
-under-measure the discrete GPU because its boost clocks have not ramped, so the DLT
-split hands the weak iGPU too many rows and the iGPU becomes the bottleneck;
-\texttt{--calib-steps 50} nearly closes the gap. And the run-to-run variance
-(\S\ref{sec:variance}) is comparable to the $\sim$7\,\% at stake, so the sub-dGPU
-margin sits at the edge of measurability. The verdict matches the CPU+GPU case: the
-DLT machinery is correct, but on a node pair this lopsided the communication cost eats
-the minority node's contribution. A two-GPU win would need devices within a small
-factor of each other, or a decomposition whose seam does not cross the host boundary
-every step.
+In the terms of \S11.3, the board is the divisible load $L = R\cdot C$ cells, node $i$
+receives a row share $\mathit{part}_i$, and its inverse speed is $p_i = 1/R_i$. The
+book's affine node cost has a computation term $p_i(\mathit{part}_i L + e_i)$ (Eq.~11.5)
+and a distribution term $l_i(a\,\mathit{part}_i L + b)$ (Eq.~11.7). Our ghost seam is
+exactly the constant $b$ of that model: a single boundary row moved per step,
+independent of $\mathit{part}_i$ --- the ``boundary row of pixels'' of the book's
+Fig.~11.5(a). The optimum (Fig.~11.9) makes both nodes finish together.
+
+Dropping the communication constant $b$ and the fixed overhead $e_i$ leaves the naive
+closed form, which is what the auto-calibration computes:
+\begin{equation}
+	\label{eq:naive2gpu}
+	\mathit{part}_\text{iGPU} = \frac{R_\text{iGPU}}{R_\text{iGPU}+R_\text{dGPU}}
+	\approx \frac{2.1}{2.1+31.5} \approx 6.3\,\%,
+\end{equation}
+with $R_\text{iGPU}\approx 2.1$ and $R_\text{dGPU}\approx 31.5$\,Gcells/s (the
+pure-dGPU halo rate). This is an order of magnitude larger than the CPU's 0.6\,\%
+share, so the DLT ceiling $R_\text{iGPU}+R_\text{dGPU}\approx 33.6$\,Gcells/s now sits
+$\sim$6.7\,\% above the discrete GPU alone --- a prize worth chasing.
+
+\subsection{Theory versus the empirical optimum}
+\label{sec:twogpu-sweep}
+
+Fig.~\ref{fig:frac} sweeps the iGPU row share directly, holding the composition at
+\texttt{igpu,dgpu} and measuring steady-state throughput (best of five, explicit
+\texttt{--fracs} so no calibration bias, long runs so the boost clocks are ramped).
+Each curve rises to a peak near a 5--6\,\% iGPU share and then falls off a cliff: past
+$\sim$7\,\% the slow iGPU is handed more rows than it can finish inside the dGPU's step
+time and becomes the bottleneck. The empirical optimum sits slightly below the naive
+6.3\,\% of Eq.~\eqref{eq:naive2gpu} --- exactly the correction the full model predicts,
+since the seam $b$ and the iGPU's larger per-step launch/sync overhead $e_\text{iGPU}$
+lower its effective rate, so it should receive fewer rows than its raw throughput alone
+suggests.
+
+\begin{table}[H]
+	\centering
+	\caption{iGPU+dGPU fraction sweep (best of five, steady state). ``dGPU'' is the
+	pure discrete-GPU halo rate ($\mathit{part}_\text{iGPU}=0$); ``best'' is the peak
+	over the sweep at the listed iGPU share. Ceiling $=R_\text{iGPU}+R_\text{dGPU}$
+	with $R_\text{iGPU}=2.1$. Rates in Gcells/s.}
+	\label{tab:frac}
+	\begin{tabular}{@{}rrrrrr@{}}
+		\toprule
+		$N$ & dGPU & best (iGPU share) & win & ceiling & \% of ceiling \\
+		\midrule
+		8192  & 30.95 & 31.20 (6\,\%) & $+0.8\,\%$ & 33.05 & 94.4\,\% \\
+		16384 & 31.14 & 31.81 (5\,\%) & $+2.2\,\%$ & 33.24 & 95.7\,\% \\
+		24576 & 31.48 & 32.81 (5\,\%) & $+4.2\,\%$ & 33.58 & 97.7\,\% \\
+		32768 & 31.58 & 33.35 (6\,\%) & $+5.6\,\%$ & 33.68 & 99.0\,\% \\
+		40960 & 31.46 & 32.94 (5\,\%) & $+4.7\,\%$ & 33.56 & 98.2\,\% \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+\subsection{Why the win grows with the grid}
+\label{sec:twogpu-scaling}
+
+The decisive observation is the scaling (Table~\ref{tab:frac}, Fig.~\ref{fig:frac}(B)).
+The seam $b$ is a single row --- a fixed $C$ bytes per step --- while the compute load
+$L = R\cdot C$ grows as $N^2$. The communication-to-computation ratio is therefore
+$\sim b/L \sim 1/N$ and vanishes as the grid grows, so the achievable throughput must
+approach the DLT ceiling $R_\text{iGPU}+R_\text{dGPU}$. That is what happens: the best
+static split beats pure dGPU by $+0.8\,\%$ at $N=8192$, growing monotonically to
+$+5.6\,\%$ at $N=32768$ ($+4.7\,\%$ at $40960$, within variance of the peak). As a
+fraction of the ceiling, the hybrid climbs from 94.4\,\% to 99.0\,\%, while pure dGPU
+stays pinned at $\sim$93.7\,\% --- it is simply leaving the iGPU's $\sim$6\,\% on the
+table. At the largest grids the two-GPU hybrid captures essentially the entire
+theoretical bound: DLT behaving exactly as \S11.3 describes in the large-load limit,
+where communication is negligible and the partition delivers the sum of the nodes'
+rates.
+
+\insertimage[\label{fig:frac}]{hybrid_frac_sweep}{width=\linewidth}{iGPU+dGPU fraction sweep.
+(A)~Steady-state throughput vs the iGPU row share, one curve per grid size (best of
+five). Each curve rises to a peak near 5--6\,\% then falls off a cliff as the iGPU is
+overloaded past the dGPU's step time; the empirical peak sits just below the naive-DLT
+share $R_i/(R_i{+}R_d)\approx 6.3\,\%$ (dotted). (B)~The best static split's gain over
+pure dGPU (left axis) grows with $N$, and the hybrid's share of the $R_i+R_d$ ceiling
+(right axis) climbs from 94\,\% to 99\,\% while pure dGPU stays flat at $\sim$94\,\% ---
+the fixed one-row seam amortized against $N^2$ compute.}
+
+This reverses the pessimistic reading from the CPU+GPU study and the small grids: the
+earlier ``a few percent below pure dGPU'' was measured only at $N\le 16384$, where the
+seam still costs an appreciable share and the margin hid inside the $\sim$5--10\,\%
+boost variance. With clean measurement and large grids, a well-chosen static iGPU+dGPU
+split is a real, if modest, win --- one whose size is governed by the divisible-load
+communication term, not by luck.
+
+\subsection{The catch: the auto-split overshoots}
+\label{sec:twogpu-auto}
+
+The win requires the correct fraction, and the default auto-calibration does not
+reliably find it. It computes the naive Eq.~\eqref{eq:naive2gpu} from measured rates,
+which (a)~ignores the $b$ and $e_i$ correction that pulls the optimum below 6.3\,\%,
+and (b)~is biased by boost warm-up --- a short calibration under-measures the dGPU,
+inflating the iGPU share further, straight into the cliff. Lengthening calibration
+(\texttt{--calib-steps 50}) helps but does not fully cure it. So today the win is
+reachable with a hand-set \texttt{--fracs 0.05,0.95}; making the default land there ---
+by damping the split toward the dGPU, or by folding a communication/overhead term into
+the calibration --- is the obvious next step.
 
 \section{Conclusion: does static load balancing pay off here?}
 \label{sec:conclusion}
 
-The implementation is correct and the theory is vindicated, but the regime is wrong
-for a win.
+The implementation is correct and the theory is vindicated. Whether it pays off
+depends on the node pair and the grid size.
 
 \begin{itemize}
 	\item Correctness. The hybrid verifies bit-for-bit against the \texttt{CpuEngine}
@@ -339,10 +427,13 @@ for a win.
 	exchange $+$ pool wakeup $+$ sync exceed that. The hybrid ranges from $-29$\,\%
 	(small/mid $N$, overhead dominated) to break-even (large $N$, overhead
 	amortized). It never meaningfully beats pure GPU.
-	\item The same holds one step up the device hierarchy. Replacing the CPU with the
-	idle integrated GPU (\S\ref{sec:twogpu}) raises the minority share from 0.6\,\% to
-	$\sim$7\,\%, but the host-staged inter-GPU seam still costs more than that, so
-	iGPU\,$+$\,dGPU lands a few percent below pure dGPU --- more balanced, same verdict.
+	\item One step up the device hierarchy, it does pay off. Replacing the CPU with the
+	idle integrated GPU (\S\ref{sec:twogpu}) raises the minority share to $\sim$6\,\%,
+	and because the seam is a single fixed row its cost vanishes as $1/N$. A well-chosen
+	static iGPU+dGPU split then beats pure dGPU by a margin that grows with the grid ---
+	up to $+5.6\,\%$ at $N=32768$, reaching 99\,\% of the $R_\text{iGPU}+R_\text{dGPU}$
+	ceiling. The prize is real here; at small $N$ it hid inside the boost noise, and the
+	default auto-split still overshoots it (\S\ref{sec:twogpu-auto}).
 	\item The only speed-up in the data is a kernel-engineering side effect. The
 	ghost-cell halo kernel, built to make domain decomposition possible, is
 	incidentally 10--16\,\% faster than the original global kernel at large $N$
@@ -357,15 +448,18 @@ for a win.
 	coordination. Consider promoting the halo formulation to the default global
 	kernel (it needs only a one-row zero-pad at the board's top/bottom under bounded
 	edges).
-	\item Keep the hybrid as a correct DLT reference, not a production path on this
-	hardware. It becomes a win only when $R_\mathrm{cpu}$ and $R_\mathrm{gpu}$ are
-	within a small factor (say $<5\times$): a vectorized / bit-sliced CPU kernel
-	(raising $R_\mathrm{cpu}$ by 1--2 orders of magnitude), a weaker / shared GPU, or
-	an integrated GPU\,+\,CPU. There the offloaded share is large enough to dwarf the
-	fixed coordination cost.
-	\item Re-run OpenCL after a reboot before regenerating committed OpenCL figures;
-	the current 1.7\,Gcells/s is a transient ICD pathology, not this hardware's OpenCL
-	performance.
+	\item The hybrid pays off under either of two conditions: the node rates are within a
+	small factor (a vectorized / bit-sliced CPU, a weaker / shared GPU), so the minority
+	share is large; or the load is large enough that the fixed one-row seam is negligible
+	against $N^2$ compute. The CPU+GPU pair meets neither (0.6\,\% share, and the grids do
+	not go high enough); the iGPU\,$+$\,dGPU pair meets the second at $N\gtrsim 16384$ and
+	wins by up to $+5.6\,\%$ (\S\ref{sec:twogpu}). Use it there with a hand-set
+	\texttt{--fracs} near $0.05$.
+	\item Fix the auto-calibrated split so the default \texttt{--engine hybrid} lands on
+	the $\sim$5--6\,\% iGPU optimum instead of overshooting into the cliff: fold a
+	communication/overhead term into the calibration, or damp the split toward the dGPU
+	(\S\ref{sec:twogpu-auto}). There is no OpenCL pathology to fix --- the slow figure was
+	the integrated GPU (\S\ref{sec:opencl}).
 \end{enumerate}
 
 The bottom line: static load balancing is the right tool for balanced heterogeneous
