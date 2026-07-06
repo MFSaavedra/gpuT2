@@ -337,11 +337,15 @@ Fig.~\ref{fig:frac} sweeps the iGPU row share directly, holding the composition 
 \texttt{--fracs} so no calibration bias, long runs so the boost clocks are ramped).
 Each curve rises to a peak near a 5--6\,\% iGPU share and then falls off a cliff: past
 $\sim$7\,\% the slow iGPU is handed more rows than it can finish inside the dGPU's step
-time and becomes the bottleneck. The empirical optimum sits slightly below the naive
-6.3\,\% of Eq.~\eqref{eq:naive2gpu} --- exactly the correction the full model predicts,
-since the seam $b$ and the iGPU's larger per-step launch/sync overhead $e_\text{iGPU}$
-lower its effective rate, so it should receive fewer rows than its raw throughput alone
-suggests.
+time and becomes the bottleneck. The empirical peaks scatter between 5\,\% and 6\,\%,
+straddling the naive 6.3\,\% of Eq.~\eqref{eq:naive2gpu} to within the sweep's 1\,\%
+grid resolution: near the top the throughput curve is flat, so best-of-five boost
+variance moves the winning grid point by $\pm$1 step. It is tempting to read the
+sub-6.3\,\% peaks as the seam and the iGPU's launch overhead lowering its effective
+rate --- but \S\ref{sec:twogpu-dlt} measures those terms and feeds them into the
+reference DLT library, and the genuine correction to the optimum is under $0.05$
+percentage points, far too small to explain a shift to 5\,\%. The sub-6.3\,\% readings
+are sampling noise, not a real overhead-driven bias.
 
 \begin{table}[H]
 	\centering
@@ -396,18 +400,90 @@ boost variance. With clean measurement and large grids, a well-chosen static iGP
 split is a real, if modest, win --- one whose size is governed by the divisible-load
 communication term, not by luck.
 
+\subsection{DLTlib cross-check: the overhead is negligible}
+\label{sec:twogpu-dlt}
+
+To separate genuine divisible-load effects from measurement noise, we fed the platform
+into the reference library the engine is modelled on --- DLTlib (Barlas, Appendix~G) ---
+and compared its optimum to ours. The platform maps to DLTlib's single-level tree as an
+idle load-originating root (a pure distributor) with one compute child per device of
+processing speed $\mathit{power}_i = 1/R_i$; the library's fixed-cost term $e_{0,i}$ is
+in load units, so a physical per-step overhead $\tau_i$ (seconds) enters as
+$e_{0,i} = \tau_i R_i$.
+
+\paragraph{The naive split is the library's optimum.} With communication switched off
+($\mathit{link}=0$, $e_0=0$) DLTlib's \texttt{SolveImage} returns
+$\mathit{part}_i = R_i/\sum_j R_j$ to six digits --- the iGPU share $6.30\,\%$ and, for
+the CPU+GPU pair, $0.58\,\%$. So the engine's hand-rolled Eq.~\eqref{eq:naive2gpu} is
+not an approximation: it \emph{is} the \S11.3 optimum, and the library confirms it
+exactly.
+
+\paragraph{The measured overhead does not move it.} We then measured each device's
+affine per-step timing $t = \tau_i + \text{cells}/R_i$ by running it solo across board
+sizes (Fig.~\ref{fig:dltfit}): $R_\text{iGPU}=2.12$, $R_\text{dGPU}=31.5$\,Gcells/s
+(matching the sweep), with fixed overheads of only $\tau_\text{iGPU}\approx23\,\mu$s and
+$\tau_\text{dGPU}\approx6\,\mu$s. Feeding $(R_i,\tau_i)$ back into DLTlib gives the
+overhead-aware optimum of Table~\ref{tab:dlt}: it stays within $0.05$ percentage points
+of the naive $6.30\,\%$ at every grid size, and the correction vanishes as $1/N^2$.
+
+\begin{table}[H]
+	\centering
+	\caption{DLTlib optimum with the measured fixed overhead ($\tau_\text{iGPU}=23\,\mu$s,
+	$\tau_\text{dGPU}=6\,\mu$s) folded in via $e_0=\tau R$, versus the naive share and the
+	fraction-sweep peak. The overhead correction is $\le 0.05$\,pp at every $N$.}
+	\label{tab:dlt}
+	\begin{tabular}{@{}rrrr@{}}
+		\toprule
+		$N$ & naive $R_i/\Sigma R$ & DLTlib $+$ fitted $e_0$ & empirical peak \\
+		\midrule
+		8192  & 6.30\,\% & 6.25\,\% & $\sim$6\,\% \\
+		16384 & 6.30\,\% & 6.29\,\% & $\sim$5\,\% \\
+		24576 & 6.30\,\% & 6.30\,\% & $\sim$5\,\% \\
+		32768 & 6.30\,\% & 6.30\,\% & $\sim$6\,\% \\
+		40960 & 6.30\,\% & 6.30\,\% & $\sim$5\,\% \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+The reason is scale: at $N\ge 8192$ a step is milliseconds while the fixed overhead is
+tens of microseconds, so $\tau/t_\text{step}\lesssim 10^{-2}$ and the split is
+overhead-insensitive. The prediction is therefore a flat $6.3\,\%$, and the empirical
+peaks straddle it within one sweep step (Fig.~\ref{fig:dltpred}). The reading that the
+optimum ``sits below $6.3\,\%$ because of the seam and launch overhead'' does not survive
+this measurement: neither the fixed launch cost nor the one-row seam is within two orders
+of magnitude of what a $-1.3$\,pp shift would require. The $5$--$6\,\%$ scatter is grid
+resolution and boost variance, not a physical bias. (As a consistency check, adding a
+\emph{proportional} link cost instead moves the share the wrong way --- up, toward an
+even split --- because DLTlib's link models transfer cost proportional to the load moved,
+whereas the GoL seam is a fixed single row: the overhead belongs in $e_0$, not the link.)
+
+\insertimage[\label{fig:dltfit}]{dlt_fit}{width=\linewidth}{Per-device affine timing
+$t_\text{step}=\tau+\text{cells}/R$, each device run solo through the hybrid harness.
+(A)~time per step vs.\ cells (log--log): the slope gives $R$. (B)~time per cell: the
+fixed overhead $\tau$ shows only as the small-$N$ bump (leftmost point) and is gone by
+$N=1024$, pinning $\tau_\text{iGPU}\approx23\,\mu$s, $\tau_\text{dGPU}\approx6\,\mu$s.}
+
+\insertimage[\label{fig:dltpred}]{dlt_pred_vs_empirical}{width=0.85\linewidth}{DLTlib
+optimum with fitted overhead (blue) vs.\ the fraction-sweep peaks (green, $\pm$1 sweep
+step) and the naive $R_i/\Sigma R$ (dotted). The prediction is a flat $6.3\,\%$; the
+empirical peaks straddle it within resolution --- confirming the split is the naive DLT
+optimum and the sub-6.3\,\% readings are noise.}
+
 \subsection{The catch: the auto-split overshoots}
 \label{sec:twogpu-auto}
 
 The win requires the correct fraction, and the default auto-calibration does not
-reliably find it. It computes the naive Eq.~\eqref{eq:naive2gpu} from measured rates,
-which (a)~ignores the $b$ and $e_i$ correction that pulls the optimum below 6.3\,\%,
-and (b)~is biased by boost warm-up --- a short calibration under-measures the dGPU,
-inflating the iGPU share further, straight into the cliff. Lengthening calibration
-(\texttt{--calib-steps 50}) helps but does not fully cure it. So today the win is
-reachable with a hand-set \texttt{--fracs 0.05,0.95}; making the default land there ---
-by damping the split toward the dGPU, or by folding a communication/overhead term into
-the calibration --- is the obvious next step.
+reliably find it --- not because the naive Eq.~\eqref{eq:naive2gpu} is wrong (\S\ref{sec:twogpu-dlt}
+shows it is the exact optimum) but because a short in-run calibration mis-measures the
+rates that feed it. It is biased by boost warm-up: the dGPU needs a long ramp to reach
+its 31.5\,Gcells/s peak (\S\ref{sec:twogpu-dlt}), so a brief calibration under-measures
+it and inflates the iGPU share above the true 6.3\,\%. Because the throughput curve past
+the optimum falls off a cliff while the approach is gentle, this asymmetry makes overshoot
+far costlier than undershoot. Lengthening calibration (\texttt{--calib-steps 50}) helps
+but does not fully cure it. So today the win is reachable with a hand-set
+\texttt{--fracs 0.05,0.95}; making the default land there --- by calibrating the dGPU with
+a proper boost warm-up so its rate is not under-measured, or simply by damping the split
+toward the dGPU --- is the obvious next step.
 
 \section{Conclusion: does static load balancing pay off here?}
 \label{sec:conclusion}

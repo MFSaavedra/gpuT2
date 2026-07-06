@@ -87,9 +87,13 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   legacy two-node CPU+GPU constructor (`--gpu-backend`, `--cpu-frac`) is kept as a wrapper. Opt-in: built
   whenever a GPU backend is configured. Verified via `--engine hybrid --verify` and a `gol_hybrid_tests`
   gtest across compositions. **Finding (fraction sweep, best-of-5):** the dGPU is **~15× the iGPU**
-  (dGPU-halo ~31 vs Intel-OpenCL ~2.1 Gcells/s), so the DLT-optimal iGPU share is **~5–6%** (naive DLT
-  `R_i/ΣR ≈ 6.3%`; the empirical optimum is slightly lower because the fixed seam + iGPU launch latency
-  cut its effective rate). The ghost seam is a **fixed one row** while compute grows as N², so the
+  (dGPU-halo ~31 vs Intel-OpenCL ~2.1 Gcells/s), so the DLT-optimal iGPU share is the naive
+  `R_i/ΣR ≈ 6.3%`. A **DLTlib cross-check** (`analysis/dlt/`, reference library from Barlas Appendix G)
+  confirms it: reproduces `R_i/ΣR_j` to six digits, and with the *measured* per-step overhead (τ ~ tens
+  of µs, fit from solo runs) folded in as `e0` the correction is **<0.05pp** — so DLT predicts a flat
+  ~6.3% at all N≥8192, and the empirical 5–6% sweep peaks are that value within the 1% grid resolution +
+  boost noise (the "below 6.3% due to overhead" reading over-interpreted sweep noise). The ghost seam is
+  a **fixed one row** while compute grows as N², so the
   per-step communication vanishes as ~1/N: a **well-chosen static split beats pure dGPU by a margin that
   grows with the grid** — +0.8% at 8192² → **+5.6% at 32768²**, reaching **~99% of the R_iGPU+R_dGPU
   ceiling** (pure dGPU sits at ~94%). At small N the seam still dominates (≈ pure dGPU) — the earlier
@@ -291,6 +295,7 @@ scripts/       sweep.sh sweep_gpu_opt.ps1 sweep_scaling.ps1 (CPU+CUDA+OpenCL+hyb
                run_gui.sh                                  (launch gol_gui on the NVIDIA GPU for zero-copy interop)
 results/       sweep_gpu_opt.csv sweep_scaling.csv          (Windows baseline, BOM); linux/ holds the Linux re-run
 analysis/      results.ipynb                               (loads results/linux/, writes report/img/bench_*.png)
+               dlt/                                        (DLTlib cross-check: dlt_split.cpp + build.sh, measure_overhead.sh, plot_dlt.py, overhead.csv, README.md)
 ```
 
 Per the report plan (`report/main.tex`), the two kernel-config variations to benchmark are block sizes
