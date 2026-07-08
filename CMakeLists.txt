@@ -172,6 +172,7 @@ if(BUILD_GUI)
         src/gui/main_gui.cpp
         src/gui/GolGlWidget.cpp
         src/gui/MainWindow.cpp
+        src/gui/GolBench.cpp
         # Headers carry Q_OBJECT and live apart from their .cpp, so list them
         # explicitly for AUTOMOC to scan (it only auto-pairs same-dir basenames).
         include/gol/gui/GolGlWidget.hpp

@@ -100,13 +100,28 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   space/S/R/C/I/F and **P** (save a PNG screenshot of the view to the CWD via `grabFramebuffer`), and a Qt
   control panel (play/pause, step, reset, reseed, clear, **Open RLE…**, **Screenshot**, speed, colour mode,
   palette, wrap). CLI mirrors the headless `gol` flags
-  (`--rows/--cols/--gens/--threads/--wrap/--seed/--rle/--engine cpu|cuda/--block` + `COLSxROWS`); `--gens`
+  (`--rows/--cols/--gens/--threads/--wrap/--seed/--rle/--engine cpu|cuda/--block` + `COLSxROWS`), plus
+  `--bench N`/`--bench-warmup W` for the headless throughput mode (see below); `--gens`
   is an interactive auto-pause. Each frame **presents the current board then steps** (not step-then-present),
   so a freshly painted cell is visible the frame it is drawn before it evolves; **reset** restores a
   generation-0 snapshot (seed / last-loaded pattern), kept separate from the host-upload scratch board.
   **Optimus caveat:** on this hybrid-graphics box OpenGL defaults to the
   Intel iGPU, on which interop is unavailable (it falls back to host-upload); `scripts/run_gui.sh` sets
   PRIME-offload env vars so the GL context lands on the NVIDIA GPU and the zero-copy path is used.
+
+  **Headless throughput bench (`--bench N`):** the interactive viewer is *refresh-bound* — a
+  `QOpenGLWidget` swaps under vsync, so it presents only ~60 boards/s no matter how fast the GPU
+  computes and moves them. `--bench N` (plus `--bench-warmup W`, default 50) measures the present paths
+  **uncapped**: it builds an **offscreen** GL context (`QOffscreenSurface`, no window, no `swapBuffers`),
+  then times N back-to-back iterations of the same per-frame work and exits without opening a window
+  (`gol::runGuiBench`, `src/gui/GolBench.cpp`). It reports Gcells/s for **kernel-only** (summed
+  `lastKernelMillis`, matching the headless `--csv` kernel column), **step wall**, **interop present**
+  (step + CUDA D2D into the PBO + PBO→texture), and **host-upload present** (step + `download` + texture
+  upload). **Finding (GTX 1660 Ti):** the zero-copy interop present runs at **~14 Gcells/s** (steady
+  across 4096²–8192²) — **~5× the host-upload path** (~2.8 Gcells/s, PCIe-download-bound) and **~14× what
+  a 60 FPS display would allow** (~1–4 Gcells/s), confirming the viewer is display-bound, not
+  interop-bound. Run it on the NVIDIA GL context (`scripts/run_gui.sh … --bench N`) so the interop path
+  is exercised; a bare launch on the iGPU context reports host-upload only.
 
 All three backends now run and verify against the `CpuEngine` reference oracle. GPU CMake targets are
 opt-in and double-gated (the option **and** the source must exist); the project still builds and runs
@@ -143,6 +158,7 @@ cmake -S . -B build -DBUILD_CUDA=ON -DBUILD_GUI=ON
 cmake --build build --target gol_gui
 ./scripts/run_gui.sh 1024x1024 --rle patterns/highlife_replicator.rle   # NVIDIA GL context (zero-copy)
 ./build/gol_gui --engine cpu 512x512                                     # CPU engine, runs anywhere
+./scripts/run_gui.sh 4096x4096 --engine cuda --bench 300                 # headless present-path throughput (no vsync)
 ```
 
 `scripts/run_gui.sh` sets PRIME-offload env vars (`__NV_PRIME_RENDER_OFFLOAD`, `__GLX_VENDOR_LIBRARY_NAME`,
@@ -224,14 +240,14 @@ Layout (parenthesised notes are clarifications — header-only units, directory 
 ```
 include/gol/   Grid.hpp ISimEngine.hpp IRenderer.hpp Config.hpp LifeRules.hpp Timer.hpp Barrier.hpp
                engines/CpuEngine.hpp  render/NullRenderer.hpp render/TextRenderer.hpp render/AnsiRenderer.hpp
-               render/CudaGlInterop.hpp  gui/GolGlWidget.hpp gui/MainWindow.hpp
+               render/CudaGlInterop.hpp  gui/GolGlWidget.hpp gui/MainWindow.hpp gui/GolBench.hpp
                patterns/Pattern.hpp patterns/RleLoader.hpp
 src/core/      Config.cpp main.cpp                         (Grid/LifeRules/Timer are header-only)
 src/engines/   cpu/CpuEngine.cpp  cuda/CudaEngine.cu cuda/kernel.cu  opencl/OpenCLEngine.cpp opencl/kernel.cl
 include/gol/engines/  CudaEngine.hpp  cuda/kernel.cuh  OpenCLEngine.hpp
 src/render/    TextRenderer.cpp AnsiRenderer.cpp           (NullRenderer is header-only)
                CudaGlInterop.cu                            (CUDA<->GL bridge, nvcc; gol_cudagl lib)
-src/gui/       main_gui.cpp GolGlWidget.cpp MainWindow.cpp shaders/display.vert shaders/display.frag
+src/gui/       main_gui.cpp GolGlWidget.cpp MainWindow.cpp GolBench.cpp shaders/display.vert shaders/display.frag
 src/patterns/  Pattern.cpp RleLoader.cpp
 tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp cuda_equivalence_test.cpp opencl_equivalence_test.cpp
 patterns/      *.rle                                       (block, blinker, birth_on_six, glider, acorn, r_pentomino, highlife_replicator, highlife_spaceship, highlife_c98_gun)

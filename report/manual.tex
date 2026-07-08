@@ -254,6 +254,8 @@ and impose no link dependency.
 		\texttt{include/gol/gui/MainWindow.hpp}   & Window + control panel decl. & \ref{sec:gui} \\
 		\texttt{src/gui/MainWindow.cpp}           & Window, panel, signal wiring & \ref{sec:gui} \\
 		\texttt{src/gui/main\_gui.cpp}            & Viewer entry point + CLI & \ref{sec:gui} \\
+		\texttt{include/gol/gui/GolBench.hpp}     & Headless present-path bench decl. & \ref{sec:gui-bench} \\
+		\texttt{src/gui/GolBench.cpp}             & Offscreen throughput bench (\texttt{-{}-bench}) & \ref{sec:gui-bench} \\
 		\texttt{src/gui/shaders/display.\{vert,frag\}} & Display shaders (read at runtime) & \ref{sec:gui} \\
 		\texttt{scripts/run\_gui.sh}              & Launch on the NVIDIA GPU (Optimus) & \ref{sec:gui} \\
 		\texttt{CMakeLists.txt}                  & Build, GPU/GUI opt-in gating & \ref{sec:cmake} \\
@@ -1533,6 +1535,61 @@ if (playing_ && engine_)
     if (cfg_.generations > 0 && generation_ >= cfg_.generations) { playing_ = false; break; }
   }
 \end{sourcecode}
+
+\subsection{Measuring the paths uncapped --- the headless bench}
+\label{sec:gui-bench}
+
+The viewer is a poor \emph{throughput} instrument: a \texttt{QOpenGLWidget} calls
+\texttt{swapBuffers} under vsync, so it presents at most $\sim$60 boards per second
+no matter how fast the GPU computes and moves them. At $1024^2$ that ceiling is
+$\sim$60\,Mcells/s --- three orders of magnitude below the kernel --- so the
+displayed frame rate says nothing about the interop path's real cost. The
+refresh, not the copy, is the wall.
+
+To measure the present paths \textbf{uncapped}, \texttt{gol\_gui --bench N}
+(\texttt{gol::runGuiBench}, \texttt{src/gui/GolBench.cpp}) builds an
+\textbf{offscreen} GL context (\texttt{QOffscreenSurface} --- no window, no
+\texttt{swapBuffers}, nothing vsync-bound) and times $N$ back-to-back repetitions
+of the exact per-frame work of \S\ref{sec:gui-frame}, then exits without opening a
+window. It reports four figures in Gcells/s: \textbf{kernel-only} (summed
+\texttt{lastKernelMillis} --- the same cudaEvent measure as the headless
+\texttt{-{}-csv} kernel column), \textbf{step wall} (chrono around the bare
+\texttt{step()}s), \textbf{interop present} (step\,+\,D2D-into-PBO\,+\,PBO$\to$texture),
+and \textbf{host-upload present} (step\,+\,\texttt{download}\,+\,texture upload from
+client memory). Each phase runs \texttt{-{}-bench-warmup} untimed iterations first
+and a \texttt{glFinish} drains the GL queue before the clock stops, so the wall
+covers the whole present rather than just the enqueue.
+
+\begin{table}[H]
+	\centering
+	\caption{Headless \texttt{-{}-bench} throughput on the GTX~1660~Ti (Max-Q),
+	CUDA engine, \texttt{block=128}, best of a warmed run. The zero-copy interop
+	present holds $\sim$14\,Gcells/s --- about half the raw kernel (the present
+	adds two on-device board copies), but $\sim$5$\times$ the host-upload path and
+	$\sim$14$\times$ what a 60\,FPS display would ever allow.}
+	\label{tab:gui-bench}
+	\begin{tabular}{@{}lrr@{}}
+		\toprule
+		\textbf{Phase} (Gcells/s) & $\mathbf{4096^2}$ & $\mathbf{8192^2}$ \\
+		\midrule
+		kernel-only              & 26.7 & 30.4 \\
+		step wall                & 26.3 & 30.3 \\
+		interop present          & 13.9 & 14.3 \\
+		host-upload present      & \phantom{0}2.8 & \phantom{0}2.8 \\
+		\midrule
+		60\,FPS display ceiling  & \phantom{0}1.0 & \phantom{0}4.0 \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+
+Two things fall out of Table~\ref{tab:gui-bench}. First, the ``zero-copy'' name is
+earned: dropping the two PCIe crossings of the host-upload path (a D2H
+\texttt{download} plus an upload from client memory) is worth a $\sim$5$\times$
+speed-up, and unlike host-upload the interop present barely moves with grid size
+(its two copies are pure on-device bandwidth). Second, that win is entirely
+invisible in the running viewer --- even the slow host-upload path clears the
+60\,FPS ceiling --- which is exactly why the interop path has to be benchmarked
+offscreen to be seen at all.
 
 \subsection{The shaders}
 \label{sec:gui-shaders}

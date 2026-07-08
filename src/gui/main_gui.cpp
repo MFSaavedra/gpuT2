@@ -17,6 +17,7 @@
 #include <QSurfaceFormat>
 
 #include "gol/Config.hpp"
+#include "gol/gui/GolBench.hpp"
 #include "gol/gui/MainWindow.hpp"
 
 namespace {
@@ -35,6 +36,9 @@ namespace {
       "      --seed N         RNG seed for random fill (default 1)\n"
       "      --rle PATH       seed from an RLE pattern instead of random\n"
       "      --block N        CUDA threads per block  (default 128)\n"
+      "      --bench N        headless throughput bench: N timed steps, no window/vsync,\n"
+      "                       then exit (measures the zero-copy interop present path)\n"
+      "      --bench-warmup W untimed warmup steps before each bench phase (default 50)\n"
       "  -h, --help           show this help\n\n"
       "Controls: space play/pause | S step | R reseed | C clear | I reset | F fit\n"
       "          wheel zoom | middle/right-drag pan | left-drag paint (Shift erases)\n";
@@ -54,7 +58,7 @@ unsigned long long toULL(const std::string& s, const char* flag) {
 /// @brief Parse argv into a Config. Mirrors the headless `gol` flags (the GUI runs
 ///        interactively, so --gens is an optional auto-pause and renderer/csv/verify
 ///        do not apply).
-gol::Config parseArgs(int argc, char** argv) {
+gol::Config parseArgs(int argc, char** argv, long long& benchIters, long long& benchWarmup) {
   gol::Config cfg;
   cfg.rows = 512;
   cfg.cols = 512;
@@ -92,6 +96,10 @@ gol::Config parseArgs(int argc, char** argv) {
       cfg.rlePath = need(i, "--rle");
     } else if (a == "--block") {
       cfg.blockSize = static_cast<int>(toULL(need(i, "--block"), "--block"));
+    } else if (a == "--bench") {
+      benchIters = static_cast<long long>(toULL(need(i, "--bench"), "--bench"));
+    } else if (a == "--bench-warmup") {
+      benchWarmup = static_cast<long long>(toULL(need(i, "--bench-warmup"), "--bench-warmup"));
     } else if (a == "--engine") {
       const std::string e = need(i, "--engine");
       if (e == "cpu") {
@@ -131,7 +139,14 @@ int main(int argc, char** argv) {
   QSurfaceFormat::setDefaultFormat(fmt);
 
   QApplication app(argc, argv);
-  const gol::Config cfg = parseArgs(argc, argv);
+  long long benchIters = 0;     // --bench N (0 = run the interactive viewer)
+  long long benchWarmup = 50;   // --bench-warmup W
+  const gol::Config cfg = parseArgs(argc, argv, benchIters, benchWarmup);
+
+  // Headless bench mode: measure the present paths uncapped, then exit (no window).
+  if (benchIters > 0) {
+    return gol::runGuiBench(cfg, benchIters, benchWarmup);
+  }
 
   MainWindow window(cfg);
   window.show();
