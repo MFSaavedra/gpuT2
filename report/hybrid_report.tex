@@ -71,7 +71,7 @@
 	iGPU as a genuine second DLT node changes the verdict. Because the inter-node seam is
 	a single fixed row while compute grows as $N^2$, the communication cost vanishes as
 	$1/N$: a well-chosen static iGPU\,$+$\,dGPU split beats pure dGPU by a margin that
-	grows with the grid, reaching $+5.6\,\%$ at $N=32768$ and 99\,\% of the
+	grows with the grid, reaching $+5.5\,\%$ at $N=32768$ and 99\,\% of the
 	$R_\text{iGPU}+R_\text{dGPU}$ ceiling. The prize predicted by DLT is real once the
 	load is large enough to amortize the seam --- though the default auto-calibration
 	still overshoots the optimum.
@@ -337,8 +337,8 @@ Fig.~\ref{fig:frac} sweeps the iGPU row share directly, holding the composition 
 \texttt{--fracs} so no calibration bias, long runs so the boost clocks are ramped).
 Each curve rises to a peak near a 5--6\,\% iGPU share and then falls off a cliff: past
 $\sim$7\,\% the slow iGPU is handed more rows than it can finish inside the dGPU's step
-time and becomes the bottleneck. The empirical peaks scatter between 5\,\% and 6\,\%,
-straddling the naive 6.3\,\% of Eq.~\eqref{eq:naive2gpu} to within the sweep's 1\,\%
+time and becomes the bottleneck. The empirical peaks sit at 5--6\,\% (four of the five
+grids peak at 6\,\%), straddling the naive 6.3\,\% of Eq.~\eqref{eq:naive2gpu} to within the sweep's 1\,\%
 grid resolution: near the top the throughput curve is flat, so best-of-five boost
 variance moves the winning grid point by $\pm$1 step. It is tempting to read the
 sub-6.3\,\% peaks as the seam and the iGPU's launch overhead lowering its effective
@@ -358,11 +358,11 @@ are sampling noise, not a real overhead-driven bias.
 		\toprule
 		$N$ & dGPU & best (iGPU share) & win & ceiling & \% of ceiling \\
 		\midrule
-		8192  & 30.95 & 31.20 (6\,\%) & $+0.8\,\%$ & 33.05 & 94.4\,\% \\
-		16384 & 31.14 & 31.81 (5\,\%) & $+2.2\,\%$ & 33.24 & 95.7\,\% \\
-		24576 & 31.48 & 32.81 (5\,\%) & $+4.2\,\%$ & 33.58 & 97.7\,\% \\
-		32768 & 31.58 & 33.35 (6\,\%) & $+5.6\,\%$ & 33.68 & 99.0\,\% \\
-		40960 & 31.46 & 32.94 (5\,\%) & $+4.7\,\%$ & 33.56 & 98.2\,\% \\
+		8192  & 30.43 & 30.77 (6\,\%) & $+1.1\,\%$ & 32.53 & 94.6\,\% \\
+		16384 & 31.06 & 32.07 (6\,\%) & $+3.2\,\%$ & 33.16 & 96.7\,\% \\
+		24576 & 31.58 & 32.73 (5\,\%) & $+3.6\,\%$ & 33.68 & 97.2\,\% \\
+		32768 & 31.62 & 33.36 (6\,\%) & $+5.5\,\%$ & 33.72 & 98.9\,\% \\
+		40960 & 31.54 & 33.17 (6\,\%) & $+5.2\,\%$ & 33.64 & 98.6\,\% \\
 		\bottomrule
 	\end{tabular}
 \end{table}
@@ -375,9 +375,9 @@ The seam $b$ is a single row --- a fixed $C$ bytes per step --- while the comput
 $L = R\cdot C$ grows as $N^2$. The communication-to-computation ratio is therefore
 $\sim b/L \sim 1/N$ and vanishes as the grid grows, so the achievable throughput must
 approach the DLT ceiling $R_\text{iGPU}+R_\text{dGPU}$. That is what happens: the best
-static split beats pure dGPU by $+0.8\,\%$ at $N=8192$, growing monotonically to
-$+5.6\,\%$ at $N=32768$ ($+4.7\,\%$ at $40960$, within variance of the peak). As a
-fraction of the ceiling, the hybrid climbs from 94.4\,\% to 99.0\,\%, while pure dGPU
+static split beats pure dGPU by $+1.1\,\%$ at $N=8192$, growing monotonically to
+$+5.5\,\%$ at $N=32768$ ($+5.2\,\%$ at $40960$, within variance of the peak). As a
+fraction of the ceiling, the hybrid climbs from 94.6\,\% to 98.9\,\%, while pure dGPU
 stays pinned at $\sim$93.7\,\% --- it is simply leaving the iGPU's $\sim$6\,\% on the
 table. At the largest grids the two-GPU hybrid captures essentially the entire
 theoretical bound: DLT behaving exactly as \S11.3 describes in the large-load limit,
@@ -386,12 +386,14 @@ rates.
 
 \insertimage[\label{fig:frac}]{hybrid_frac_sweep}{width=\linewidth}{iGPU+dGPU fraction sweep.
 (A)~Steady-state throughput vs the iGPU row share, one curve per grid size (best of
-five). Each curve rises to a peak near 5--6\,\% then falls off a cliff as the iGPU is
-overloaded past the dGPU's step time; the empirical peak sits just below the naive-DLT
-share $R_i/(R_i{+}R_d)\approx 6.3\,\%$ (dotted). (B)~The best static split's gain over
-pure dGPU (left axis) grows with $N$, and the hybrid's share of the $R_i+R_d$ ceiling
-(right axis) climbs from 94\,\% to 99\,\% while pure dGPU stays flat at $\sim$94\,\% ---
-the fixed one-row seam amortized against $N^2$ compute.}
+five; darker = larger $N$). Each curve rises to a peak at 5--6\,\% then falls off a
+cliff as the iGPU is overloaded past the dGPU's step time --- steepest at the largest
+grid; the peaks straddle the naive-DLT share $R_i/(R_i{+}R_d)\approx 6.3\,\%$ (dashed)
+within the sweep's 1\,\% step. (B)~Best static split and pure dGPU as shares of the
+$R_i+R_d$ ceiling, on one axis: the hybrid climbs from 94.6\,\% to 98.9\,\% while pure
+dGPU stays pinned at $\sim$93.7\,\%; the gap between the two curves is the hybrid's
+win over pure dGPU (annotated at the ends, $+1.1\,\%\to+5.5\,\%$), growing as the fixed
+one-row seam is amortized against $N^2$ compute.}
 
 This reverses the pessimistic reading from the CPU+GPU study and the small grids: the
 earlier ``a few percent below pure dGPU'' was measured only at $N\le 16384$, where the
@@ -437,10 +439,10 @@ of the naive $6.30\,\%$ at every grid size, and the correction vanishes as $1/N^
 		$N$ & naive $R_i/\Sigma R$ & DLTlib $+$ fitted $e_0$ & empirical peak \\
 		\midrule
 		8192  & 6.30\,\% & 6.25\,\% & $\sim$6\,\% \\
-		16384 & 6.30\,\% & 6.29\,\% & $\sim$5\,\% \\
+		16384 & 6.30\,\% & 6.29\,\% & $\sim$6\,\% \\
 		24576 & 6.30\,\% & 6.30\,\% & $\sim$5\,\% \\
 		32768 & 6.30\,\% & 6.30\,\% & $\sim$6\,\% \\
-		40960 & 6.30\,\% & 6.30\,\% & $\sim$5\,\% \\
+		40960 & 6.30\,\% & 6.30\,\% & $\sim$6\,\% \\
 		\bottomrule
 	\end{tabular}
 \end{table}
@@ -507,7 +509,7 @@ depends on the node pair and the grid size.
 	idle integrated GPU (\S\ref{sec:twogpu}) raises the minority share to $\sim$6\,\%,
 	and because the seam is a single fixed row its cost vanishes as $1/N$. A well-chosen
 	static iGPU+dGPU split then beats pure dGPU by a margin that grows with the grid ---
-	up to $+5.6\,\%$ at $N=32768$, reaching 99\,\% of the $R_\text{iGPU}+R_\text{dGPU}$
+	up to $+5.5\,\%$ at $N=32768$, reaching 99\,\% of the $R_\text{iGPU}+R_\text{dGPU}$
 	ceiling. The prize is real here; at small $N$ it hid inside the boost noise, and the
 	default auto-split still overshoots it (\S\ref{sec:twogpu-auto}).
 	\item The only speed-up in the data is a kernel-engineering side effect. The
@@ -529,8 +531,8 @@ depends on the node pair and the grid size.
 	share is large; or the load is large enough that the fixed one-row seam is negligible
 	against $N^2$ compute. The CPU+GPU pair meets neither (0.6\,\% share, and the grids do
 	not go high enough); the iGPU\,$+$\,dGPU pair meets the second at $N\gtrsim 16384$ and
-	wins by up to $+5.6\,\%$ (\S\ref{sec:twogpu}). Use it there with a hand-set
-	\texttt{--fracs} near $0.05$.
+	wins by up to $+5.5\,\%$ (\S\ref{sec:twogpu}). Use it there with a hand-set
+	\texttt{--fracs} near $0.05$--$0.06$.
 	\item Fix the auto-calibrated split so the default \texttt{--engine hybrid} lands on
 	the $\sim$5--6\,\% iGPU optimum instead of overshooting into the cliff: fold a
 	communication/overhead term into the calibration, or damp the split toward the dGPU

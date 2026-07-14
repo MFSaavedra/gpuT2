@@ -95,7 +95,9 @@ The engine/renderer **strategy** layout below is in place. What exists and works
   boost noise (the "below 6.3% due to overhead" reading over-interpreted sweep noise). The ghost seam is
   a **fixed one row** while compute grows as N², so the
   per-step communication vanishes as ~1/N: a **well-chosen static split beats pure dGPU by a margin that
-  grows with the grid** — +0.8% at 8192² → **+5.6% at 32768²**, reaching **~99% of the R_iGPU+R_dGPU
+  grows with the grid** — +1.1% at 8192² → **+5.5% at 32768²** (re-run 2026-07-14; the sweep is
+  `scripts/sweep_fracs.sh` → `results/linux/frac_sweep.csv`, plotted by `analysis/plot_frac_sweep.py`),
+  reaching **~99% of the R_iGPU+R_dGPU
   ceiling** (pure dGPU sits at ~94%). At small N the seam still dominates (≈ pure dGPU) — the earlier
   "a few % below" reading was only measured at N≤16384, inside the boost noise. The default
   **auto-calibration overshoots** the optimum (naive rates, boost-warmup-biased) into the cliff, so the
@@ -292,9 +294,11 @@ src/patterns/  Pattern.cpp RleLoader.cpp
 tests/         compile_smoke_test.cpp rules_test.cpp rle_loader_test.cpp cpu_parallel_test.cpp cuda_equivalence_test.cpp opencl_equivalence_test.cpp hybrid_equivalence_test.cpp
 patterns/      *.rle                                       (block, blinker, birth_on_six, glider, acorn, r_pentomino, highlife_replicator, highlife_spaceship, highlife_c98_gun)
 scripts/       sweep.sh sweep_gpu_opt.ps1 sweep_scaling.ps1 (CPU+CUDA+OpenCL+hybrid sweeps; .ps1 are the Windows variants)
+               sweep_fracs.sh                              (iGPU+dGPU DLT fraction sweep -> results/linux/frac_sweep.csv)
                run_gui.sh                                  (launch gol_gui on the NVIDIA GPU for zero-copy interop)
-results/       sweep_gpu_opt.csv sweep_scaling.csv          (Windows baseline, BOM); linux/ holds the Linux re-run
+results/       sweep_gpu_opt.csv sweep_scaling.csv          (Windows baseline, BOM); linux/ holds the Linux re-run + frac_sweep.csv
 analysis/      results.ipynb                               (loads results/linux/, writes report/img/bench_*.png)
+               plot_frac_sweep.py                          (frac_sweep.csv -> report/img/hybrid_frac_sweep.png + tab:frac numbers)
                dlt/                                        (DLTlib cross-check: dlt_split.cpp + build.sh, measure_overhead.sh, plot_dlt.py, overhead.csv, README.md)
 ```
 

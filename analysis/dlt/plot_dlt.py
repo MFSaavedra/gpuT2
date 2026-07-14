@@ -23,7 +23,7 @@ IMG = os.path.abspath(os.path.join(HERE, "..", "..", "report", "img"))
 
 # Empirical fraction-sweep peaks (iGPU row share at the best throughput),
 # from report/hybrid_report.tex Table 'tab:frac'.
-EMPIRICAL = {8192: 0.06, 16384: 0.05, 24576: 0.05, 32768: 0.06, 40960: 0.05}
+EMPIRICAL = {8192: 0.06, 16384: 0.06, 24576: 0.05, 32768: 0.06, 40960: 0.06}
 TARGET_NS = [8192, 16384, 24576, 32768, 40960]
 
 
